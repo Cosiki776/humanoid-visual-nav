@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Habitat · 导航会话</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#111820;color:#e5edf5}*{box-sizing:border-box}body{margin:0;padding:24px;max-width:1500px;margin:auto}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}h1{font-size:23px;margin:0}small,.muted{color:#9cabbc}main{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(330px,1fr);gap:20px}.panel{background:#1b2632;border:1px solid #314153;border-radius:14px;padding:18px}#view{width:100%;aspect-ratio:3/2;object-fit:contain;background:#0a1016;border-radius:9px}#status{color:#67dfb7}#messages{height:390px;overflow:auto;margin:12px 0}.message{padding:11px 13px;margin:10px 0;border-radius:9px;background:#293849;white-space:pre-wrap;overflow-wrap:anywhere}.message.user{background:#244d57}.role{font-size:12px;color:#b0c5d7;margin-bottom:4px}textarea,select{width:100%;background:#121b25;color:#edf3f9;border:1px solid #46586c;border-radius:8px;padding:10px;font:inherit}textarea{resize:vertical;min-height:78px}button{background:#67dfb7;border:0;padding:10px 16px;border-radius:8px;cursor:pointer;color:#10261e;font-weight:600}button:disabled{opacity:.45;cursor:default}.danger{background:#453139;color:#ffb8ba}.row{display:flex;gap:10px;align-items:center;margin-top:10px}.between{justify-content:space-between}#notice{min-height:24px;color:#ffcc8a;margin-top:9px}details{margin-top:18px}select{margin:12px 0}#jobs{font-size:13px;line-height:1.7;max-height:130px;overflow:auto}.coords{font-family:monospace;font-size:13px;margin-top:12px}#plan{overflow-wrap:anywhere;font-size:13px;line-height:1.6}.badge{border:1px solid #46586c;border-radius:20px;padding:5px 10px;font-size:12px}@media(max-width:900px){body{padding:14px}main{grid-template-columns:1fr}#messages{height:260px}header{gap:15px}}
+</style>
+<header><div><h1>Habitat 导航会话</h1><small>ReplicaCAD · 人形角色 · 持续会话</small></div><span id="model" class="badge">连接中</span></header>
+<main>
+<section class="panel"><img id="view" alt="正在加载仿真画面"><div class="row between"><span id="status">场景加载中…</span><button id="stop" class="danger">取消任务及队列</button></div><div class="row"><button id="pause" disabled>暂停</button><button id="resume" disabled>继续</button></div><div id="position" class="coords">当前位置 —</div><div id="frames" class="muted">等待画面</div><p id="movement" class="muted">镜头会跟随角色，行走时请同时观察背景和坐标变化。</p><div id="steps"></div><p id="plan" class="muted">输入指令后，路线将在这里显示。</p><div id="jobs"></div></section>
+<section class="panel"><strong>和机器人对话</strong><p class="muted">支持先后访问多个目标并返回。默认排队；勾选“替换”或输入“改成去……”可中断旧任务。</p><div id="messages" aria-live="polite"></div><form id="chat"><textarea id="instruction" maxlength="4000" placeholder="先去沙发旁边，再去最近的桌子，最后回来" required></textarea><label><input type="checkbox" id="replace"> 替换当前任务</label><div class="row between"><small>Ctrl / ⌘ + Enter 发送</small><button id="send" type="submit" disabled>发送指令</button></div></form><div id="notice" role="status"></div><details><summary>离线目标测试（无需 API Key）</summary><p class="muted">使用传统路线搜索，仅验证行走，不代表模型规划。</p><select id="target"></select><button id="test" disabled>走到选中目标旁边</button><p>第二个目标：</p><select id="target2"></select><button id="testMulti" disabled>依次去两个目标，然后返回</button></details></section>
+<details class="panel" id="tracePanel" style="grid-column:1/-1"><summary>模型推理与输出（点击展开 / 收起）</summary><p class="muted">展示模型接口返回的推理文本和最终输出。</p><p id="requestWait">暂无模型请求</p></details>
+</main>
+<script>
+const $=id=>document.getElementById(id);let historyKey='', targetsKey='', frameReceived=false;
+$('instruction').placeholder='走到沙发旁边（每次一个目标）';
+$('messages').previousElementSibling.textContent='自然语言每次只去一个目标，完成后可继续发送下一条。离线多目标测试保留；勾选“替换”可中断旧任务。';
+$('messages').insertAdjacentElement('afterend', $('tracePanel'));
+const routePanel=document.createElement('section');
+routePanel.innerHTML='<h3>路线规划 · X/Z 俯视图</h3><p id="routeSource" class="muted">等待路线</p><canvas id="routeMap" width="640" height="380" style="width:100%;background:#101820;border-radius:8px"></canvas><p class="muted">灰色：可通行路网；橙色：选定路线；绿色：机器人实际位置；红色：路线终点。示意图非相机画面，非完整障碍物地图。</p><details><summary>查看实际规划输出 JSON</summary><pre id="routeJson" style="white-space:pre-wrap;overflow-wrap:anywhere">暂无路线</pre></details>';
+$('plan').insertAdjacentElement('afterend',routePanel);
+function renderRoute(s){
+ const map=s.navigation_map,view=s.route_view,points=view?.route_points||[];
+ $('routeSource').textContent=s.plan?(view?.source==='model'?'来源：模型生成节点路线，程序已校验；Habitat 执行。':view?.source==='offline_bfs'?'来源：离线 BFS 搜索，不是模型规划。':'路线来源未提供，请重启最新服务。'):'等待路线；模型响应并通过校验后才显示。';
+ $('routeJson').textContent=s.plan?JSON.stringify(s.plan,null,2):'暂无路线';
+ const canvas=$('routeMap'),ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);
+ if(!map)return;
+ const all=[...Object.values(map.nodes),...points,...(s.position?[s.position]:[])];if(!all.length)return;
+ const xs=all.map(p=>p[0]),zs=all.map(p=>p[2]),minX=Math.min(...xs),minZ=Math.min(...zs);
+ const scale=Math.min(570/Math.max(.1,Math.max(...xs)-minX),300/Math.max(.1,Math.max(...zs)-minZ));
+ const xy=p=>[35+(p[0]-minX)*scale,35+(p[2]-minZ)*scale];
+ function line(a,b,color,width){ctx.beginPath();ctx.moveTo(...xy(a));ctx.lineTo(...xy(b));ctx.strokeStyle=color;ctx.lineWidth=width;ctx.stroke()}
+ for(const [a,b] of map.edges)if(map.nodes[a]&&map.nodes[b])line(map.nodes[a],map.nodes[b],'#344556',1);
+ for(let i=1;i<points.length;i++)line(points[i-1],points[i],'#ffb454',3);
+ function dot(p,color,r){ctx.beginPath();ctx.arc(...xy(p),r,0,Math.PI*2);ctx.fillStyle=color;ctx.fill()}
+ for(const p of Object.values(map.nodes))dot(p,'#617589',2);
+ points.forEach((p,i)=>{dot(p,i===points.length-1?'#ff7373':'#ffb454',4);const [x,y]=xy(p);ctx.fillStyle='#ffffff';ctx.font='11px sans-serif';ctx.fillText(`${i+1}: ${s.plan.route[i]}`,x+6,y-6)});
+ if(s.position)dot(s.position,'#67dfb7',6);
+}
+const streamPanel=document.createElement('div');
+streamPanel.innerHTML='<h4>模型推理文本 · 流式</h4><pre id="reasoningStream" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto"></pre><details><summary>正在生成的最终输出（完整校验前不执行）</summary><pre id="contentStream" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:200px;overflow:auto"></pre></details>';
+$('requestWait').insertAdjacentElement('afterend',streamPanel);
+function renderTrace(s){
+ const r=s.model_request;
+ const stream=s.model_stream||{};
+ $('reasoningStream').textContent=stream.reasoning_content||(r?.state==='started'?'等待接口返回推理文本；部分模型或模式不提供此字段。':'本次接口未返回推理文本。');
+ $('contentStream').textContent=stream.content||'尚未收到最终输出';
+ $('requestWait').textContent=r?(r.state==='started'?`${r.stage}：已等待 ${r.elapsed_seconds||0} 秒；网络超时设置 ${r.timeout_seconds} 秒`:`${r.stage}：${r.state==='succeeded'?'响应完成':r.state==='model_timeout'?'模型请求超时':'请求失败'}，耗时 ${r.elapsed_seconds} 秒`):'暂无模型请求';
+}
+const labels={loading:'场景加载中',idle:'等待下一条指令',planning_tasks:'准备任务',planning:'正在规划路线',paused:'已暂停',walking:'正在行走',error:'服务异常',queued:'等待执行',running:'执行中',succeeded:'已完成',cancelled:'已取消',unsupported:'暂不支持',needs_clarification:'等待补充信息',blocked:'受阻',invalid_plan:'路线无效',timeout:'超时'};
+async function post(path,data){const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const result=await response.json();if(!response.ok)throw new Error(result.error||'请求失败');return result}
+async function send(data){$('tracePanel').open=true;try{const job=await post('/api/command',data);$('notice').textContent=job.message||`指令 #${job.id} 已加入队列`;$('instruction').value=''}catch(e){$('notice').textContent=e.message}}
+$('chat').addEventListener('submit',e=>{e.preventDefault();send({instruction:$('instruction').value,replace:$('replace').checked})});
+$('instruction').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'&&!$('send').disabled){e.preventDefault();$('chat').requestSubmit()}});
+$('test').onclick=()=>send({target:$('target').value});
+$('testMulti').onclick=()=>send({targets:[$('target').value,$('target2').value],return_to_start:true});
+for(const name of ['pause','resume'])$(name).onclick=async()=>{try{await post('/api/'+name,{});$('notice').textContent=name==='pause'?'已请求暂停；模型请求期间需等待响应。':'已请求继续'}catch(e){$('notice').textContent=e.message}};
+$('stop').onclick=async()=>{try{await post('/api/stop',{});$('notice').textContent='已请求停止。若正在等待模型响应，会在响应返回后停止执行。'}catch(e){$('notice').textContent=e.message}};
+async function refresh(){try{const response=await fetch('/api/status');if(!response.ok)throw new Error('状态读取失败');const s=await response.json();$('status').textContent=(labels[s.phase]||s.phase)+(s.queued?` · ${s.queued} 条排队`:'');$('model').textContent=s.model_configured?`模型：${s.model}`:'模型未配置 · 可使用离线测试';$('send').disabled=!s.ready||!s.model_configured;$('test').disabled=!s.ready;$('stop').disabled=!s.ready;$('position').textContent='当前位置 '+(s.position?s.position.map(v=>v.toFixed(3)).join(', ')+' m':'—');$('frames').textContent=(frameReceived?'画面连接正常':'等待画面')+` · 服务端已生成 ${s.frame_id} 帧`;
+if(s.last_result?.start_position&&s.last_result?.final_position){const r=s.last_result;const distance=Math.hypot(...r.final_position.map((v,i)=>v-r.start_position[i]));$('movement').textContent=`上次任务起终点位移：${distance.toFixed(2)} 米。镜头跟随角色，行走时背景和坐标会变化。`}if(s.error)$('notice').textContent=s.error;
+renderTrace(s);
+renderRoute(s);
+const modern=s.engine==='langgraph';$('pause').disabled=!modern||!s.active_job||s.phase==='paused';$('resume').disabled=!modern||!s.active_job;$('testMulti').disabled=!modern||!s.ready;
+const tk=JSON.stringify(s.targets.map(o=>o.id));if(tk!==targetsKey){targetsKey=tk;$('target').replaceChildren();$('target2').replaceChildren();for(const o of s.targets){const option=document.createElement('option');option.value=o.id;option.textContent=`${o.category} · ${o.id}`;$('target').append(option);$('target2').append(option.cloneNode(true))}const sofa=s.targets.find(o=>o.category==='sofa');if(sofa)$('target2').value=sofa.id}
+$('steps').replaceChildren();if(s.task_progress){const p=s.task_progress;for(let i=0;i<p.steps.length;i++){const step=p.steps[i],line=document.createElement('div');line.textContent=`${i<p.completed?'✓':i===p.index&&s.active_job?'▶':'○'} ${i+1}. ${step.action==='return'?(step.location==='session_start'?'返回会话起点':'返回任务起点'):step.instruction||step.target}`;$('steps').append(line)}}
+const hk=JSON.stringify(s.messages);if(hk!==historyKey){historyKey=hk;$('messages').replaceChildren();for(const m of s.messages){const box=document.createElement('div');box.className='message '+m.role;const role=document.createElement('div');role.className='role';role.textContent=m.role==='user'?'你':'机器人';const content=document.createElement('div');content.textContent=typeof m.content==='string'?m.content:m.content.message;box.append(role,content);$('messages').append(box)}$('messages').scrollTop=$('messages').scrollHeight}
+$('plan').textContent=s.plan?`目标：${s.plan.target_object}\n路线：${s.plan.route.join(' → ')}`:'输入指令后，路线将在这里显示。';$('jobs').replaceChildren();for(const j of s.jobs.slice(-5)){const line=document.createElement('div');line.textContent=`#${j.id} ${labels[j.status]||j.status} · ${j.instruction}`;$('jobs').append(line)}
+}catch(e){$('status').textContent='连接中断，请确认服务仍在运行'}finally{setTimeout(refresh,700)}}
+// One completed JPEG request at a time: avoids multipart buffering in forwarded ports.
+let frameTimer;function nextFrame(delay){clearTimeout(frameTimer);frameTimer=setTimeout(()=>{$('view').src='/api/frame.jpg?t='+Date.now()},delay)}
+$('view').onload=()=>{frameReceived=true;nextFrame(document.hidden?1000:100)};
+$('view').onerror=()=>{frameReceived=false;nextFrame(1000)};
+nextFrame(0);refresh();
+</script></html>

@@ -1,0 +1,47 @@
+{
+  "frl_apartment_chair_04_:0000": {
+    "color": "白色",
+    "color_description": "座面和靠背为白色，椅腿为深灰色；阴影下主体偏灰白。",
+    "color_source": "apt_0 双视角渲染画面人工核对，非数据集原生颜色标签"
+  },
+  "frl_apartment_chair_04_:0001": {
+    "color": "白色",
+    "color_description": "座面和靠背为白色，椅腿为深灰色；上方衣物不属于椅子颜色。",
+    "color_source": "apt_0 双视角渲染画面人工核对，非数据集原生颜色标签"
+  },
+  "frl_apartment_chair_05_:0000": {
+    "color": "棕色",
+    "color_description": "座面和靠背为棕色，细金属椅架为深灰色。",
+    "color_source": "apt_0 双视角渲染画面人工核对，非数据集原生颜色标签"
+  },
+  "frl_apartment_chair_05_:0001": {
+    "color": "棕色",
+    "color_description": "座面和靠背为棕色，细金属椅架为深灰色。",
+    "color_source": "apt_0 双视角渲染画面人工核对，非数据集原生颜色标签"
+  },
+  "frl_apartment_sofa_:0000": {
+    "color": "灰色",
+    "color_description": "沙发主体为灰色，靠垫为浅灰、灰白色；光照下主体略偏暖灰。",
+    "color_source": "apt_0 双视角渲染画面人工核对，非数据集原生颜色标签"
+  },
+  "frl_apartment_stool_02_:0000": {
+    "color": "浅木色",
+    "color_description": "多色：凳面为浅米棕木色，凳腿和支架为深棕色。主色按凳面标注。",
+    "color_source": "apt_0 双视角渲染画面人工核对，非数据集原生颜色标签"
+  },
+  "frl_apartment_table_01_:0000": {
+    "color": "深棕色",
+    "color_description": "桌面和桌腿为深棕色木纹，暗处接近黑褐色。",
+    "color_source": "apt_0 双视角渲染画面人工核对，非数据集原生颜色标签"
+  },
+  "frl_apartment_table_02_:0000": {
+    "color": "浅木色",
+    "color_description": "桌面及支架为浅棕木色；桌上蓝灰色台灯和前方棕色柜子不是桌体颜色。",
+    "color_source": "apt_0 双视角渲染画面人工核对，非数据集原生颜色标签"
+  },
+  "frl_apartment_table_03_:0000": {
+    "color": "米白色",
+    "color_description": "桌面及交叉支架呈米白、浅灰白色；暖光和阴影下桌面偏灰米色。",
+    "color_source": "apt_0 双视角渲染画面人工核对，非数据集原生颜色标签"
+  }
+}

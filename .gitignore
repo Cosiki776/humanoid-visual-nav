@@ -1,0 +1,32 @@
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local environments and installed dependencies
+.venv/
+venv/
+vendor/
+graph_vendor/
+
+# Generated results and downloaded model assets
+outputs/
+assets/
+*.log
+
+# Local secrets (keep example configuration tracked)
+.env
+.env.*
+!.env.example
+model_config.json
+
+# Editor and operating-system artifacts
+.idea/
+.DS_Store
+*.swp
+*.swo
