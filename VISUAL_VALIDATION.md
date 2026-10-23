@@ -155,3 +155,13 @@ active_verify 默认运动预算改为3 m，可通过 --travel-budget 恢复1 m�
 第三条任务立即取消：cancelled且最终位置与第二条终点逐值相等，同一会话未被销毁。浏览器点击新建会话后ID改变、物体记忆清空、任务计数归零、旧会话文件保留，无JS异常。
 证据：outputs/session_continuity_check/checks.json、reset_checks.json、session_desktop.png、after_stop.png、new_session.png。
 53项测试通过，包含共享记忆时每条指令预算独立、终点仍需新证据、停止保留进程、新建会话关闭旧进程、进程死亡禁止悄悄从起点重跑。此验证证明位置和记忆连续，不是多轮语言指代能力评测。
+
+### 物体关系记忆第一版
+
+57项测试通过。新增覆盖：只允许共同观测形成关系、单帧缺失不删除、几何变化否定及恢复、above方向性、重复表面不连边、关系输入白名单及历史共同观测原图进入VLM。权限测试包含relations模块。
+
+使用 web_visual_20261023_111026_407570 保存的真实掩膜、深度、相机位姿重建关系（未读取GT、未重跑检测）：6次观测、96个实例，得到463条关系假设，其中140条重复观测支持、320条单次假设、3条后续不支持。数量仅是系统输出，不是正确关系数，未进行关系准确率评测。
+
+独立8772测试页面显示40条最近关系，点击证据原图实际解码768px，无JS异常或横向溢出；未改变8770当前会话。一次qwen3.8-max真实请求以“走到桌子旁边的椅子旁边”为指令，输入8条候选间关系、12张图片（当前图+10候选截图+1历史共同观测图），返回observe/v0069，要求接近后确认类别与关系。该请求仅验证结构化决策接口，不代表完成关系导航或成功率提升。
+
+证据目录 outputs/relation_memory_check：checks.json、memory.json、browser_checks.json、web_relations.png、relation_evidence.png、vlm_relation_check.json。

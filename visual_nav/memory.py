@@ -2,6 +2,7 @@
 import copy
 import numpy as np
 from .geometry import horizontal_distance
+from .relations import RelationMemory
 
 
 class ObjectMemory:
@@ -11,9 +12,10 @@ class ObjectMemory:
         self.observations = []
         self.rejections = []
         self.questions = []
+        self.relations = RelationMemory()
 
     def integrate(self, detections, observation):
-        used, seen = set(), []
+        used, seen, fresh = set(), [], {}
         for detection in sorted(detections, key=lambda d: -d['confidence']):
             points = np.asarray(detection['points'])
             center = np.median(points, axis=0)
@@ -55,9 +57,11 @@ class ObjectMemory:
             item['last_seen'] = observation['id']
             used.add(key)
             seen.append(key)
+            fresh[key] = dict(bbox_min=lo.tolist(), bbox_max=hi.tolist(), confidence=float(detection['confidence']))
         self.observations.append({'id': observation['id'], 'rgb': observation['rgb_path'],
                                   'seen': seen, 'time': observation['time'],
                                   'meaning': 'visible detections only; absence is not evidence of an empty region'})
+        self.relations.update(fresh, observation)
         return seen
 
     def reject(self, key, observation_id, reason):
@@ -68,4 +72,5 @@ class ObjectMemory:
     def summary(self):
         return {'instances': [{k: copy.deepcopy(v) for k, v in item.items() if k != 'points'}
                               for item in self.instances.values()],
-                'rejections': copy.deepcopy(self.rejections), 'unresolved': list(self.questions)}
+                'rejections': copy.deepcopy(self.rejections), 'unresolved': list(self.questions),
+                'relations': self.relations.summary()}

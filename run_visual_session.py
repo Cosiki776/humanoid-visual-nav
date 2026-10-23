@@ -112,7 +112,7 @@ def main():
                         yaw=simulator.yaw if simulator else None, observation_counter=simulator.counter if simulator else 0,
                         memory=memory.summary()))
                     save_json(args.session_dir/'visual_memory.json', dict(instances=memory.instances,
-                              observations=memory.observations))
+                              observations=memory.observations, relations=memory.relations.summary()))
                     emit(dict(type='task_done', run=output.name, status=result['status']))
     finally:
         if simulator is not None:
