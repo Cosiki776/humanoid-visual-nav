@@ -12,6 +12,7 @@ from pathlib import Path
 
 import bootstrap
 from visual_nav.memory import ObjectMemory
+from visual_nav.task_context import bind_task, goal_snapshot
 
 
 def emit(event):
@@ -37,6 +38,7 @@ def main():
     simulator, detector = None, None
     memory = ObjectMemory()
     history = []
+    previous_goal = None
     output = args.session_dir
 
     def frame(image):
@@ -72,7 +74,8 @@ def main():
                 from visual_nav.loop import VisualNavigator
                 policy = VLMPolicy()
                 parse_begin = time.monotonic()
-                task = policy.parse_instruction(command['instruction'])
+                task = bind_task(policy.parse_instruction(command['instruction']), command['instruction'], previous_goal)
+                policy.task = task
                 parse_seconds = time.monotonic()-parse_begin
                 emit(dict(type='task', task=task, parse_seconds=parse_seconds))
                 save_json(output/'task.json', task)
@@ -88,6 +91,8 @@ def main():
                     max_observations=command['max_observations'], task=task,
                     event_callback=emit, memory=memory, should_stop=stop)
                 result = navigator.run(command['instruction'])
+                if result.get('verified') and result.get('status') == 'succeeded':
+                    previous_goal = goal_snapshot(memory.instances[result['selected']])
             except Exception as exc:
                 emit(dict(type='run_error', error_type=type(exc).__name__, message=str(exc)))
                 saved = output/'result.json'
@@ -105,10 +110,12 @@ def main():
                     result.update(session_id=args.session_dir.name, task_index=len(history)+1)
                     save_json(output/'result.json', result)
                     history.append(dict(run=output.name, instruction=command['instruction'],
-                                        status=result['status'], start_position=result.get('start_position'),
+                                        status=result['status'], selected=result.get('selected'),
+                                        verified=result.get('verified', False), start_position=result.get('start_position'),
                                         final_position=simulator.position.tolist() if simulator else None))
                     save_json(args.session_dir/'session.json', dict(session_id=args.session_dir.name,
-                        scene=args.scene, tasks=history, position=simulator.position.tolist() if simulator else None,
+                        scene=args.scene, tasks=history, previous_verified_goal=previous_goal,
+                        position=simulator.position.tolist() if simulator else None,
                         yaw=simulator.yaw if simulator else None, observation_counter=simulator.counter if simulator else 0,
                         memory=memory.summary()))
                     save_json(args.session_dir/'visual_memory.json', dict(instances=memory.instances,

@@ -31,7 +31,10 @@ def validate_task(data):
     relation = data.get('relation', '')
     if not isinstance(attributes, list) or not all(isinstance(x, str) for x in attributes) or not isinstance(relation, str):
         raise ValueError('Invalid task attributes/relation')
-    return dict(target_categories=target, reference_categories=reference,
+    another = data.get('another', False)
+    if not isinstance(another, bool):
+        raise ValueError('Invalid another flag')
+    return dict(target_categories=target, reference_categories=reference, another=another,
                 attributes=attributes, relation=relation,
                 detection_categories=list(dict.fromkeys(target+reference+list(COMMON_CATEGORIES))))
 
@@ -47,6 +50,7 @@ _SIMPLE_COLORS = {'红色':'red','白色':'white','棕色':'brown','褐色':'bro
 def simple_navigation_task(instruction):
     text = instruction.strip().rstrip('。！!')
     pattern = (r'(?:请)?(?:走到|走向|前往|去|找到|寻找|靠近)\s*'
+               r'(?P<another>另(?:外)?一(?:个|把|张|台|盏)?)?'
                r'(?:(?:任意|任何)(?:一)?(?:个|把|张|台|盏)?)?\s*'
                r'(?P<color>'+ '|'.join(_SIMPLE_COLORS) +r')?\s*(?:的)?'
                r'(?P<noun>'+ '|'.join(_SIMPLE_NOUNS) +r')(?:旁边|附近|边上)?')
@@ -55,5 +59,6 @@ def simple_navigation_task(instruction):
         return None
     task = validate_task(dict(supported=True,target_categories=[_SIMPLE_NOUNS[match['noun']]],
                               attributes=[_SIMPLE_COLORS[match['color']]] if match['color'] else []))
+    task['another'] = bool(match['another'])
     task['parse_method'] = 'single_object_grammar'
     return task

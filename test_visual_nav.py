@@ -234,7 +234,7 @@ class EvaluationTests(unittest.TestCase):
 class PermissionTests(unittest.TestCase):
     def test_policy_and_perception_do_not_import_gt_modules(self):
         root = Path(__file__).parent
-        for name in ('loop', 'memory', 'policy', 'perception', 'geometry', 'roadmap', 'relations'):
+        for name in ('loop', 'memory', 'policy', 'perception', 'geometry', 'roadmap', 'relations', 'task_context'):
             source = (root/'visual_nav'/(name+'.py')).read_text()
             tree = ast.parse(source)
             for node in ast.walk(tree):

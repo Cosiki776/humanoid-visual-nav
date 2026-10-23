@@ -5,9 +5,30 @@ import time
 from pathlib import Path
 from .geometry import horizontal_distance, path_length
 from .memory import ObjectMemory
-from .policy import validate_decision
+from .policy import validate_decision, DecisionValidationError
 from .task import COMMON_CATEGORIES
+from .task_context import excluded_ids
 from .docking import arrival_geometry
+
+
+def validate_target_change(decision, memory, task, selected, at_goal):
+    action, key = decision['action'], decision.get('candidate_id')
+    if action in {'select', 'observe', 'confirm'} and key in excluded_ids(task, memory.instances):
+        raise DecisionValidationError('This is the fixed previous goal, not another object', decision)
+    if selected and at_goal and action in {'explore', 'uncertain'}:
+        raise DecisionValidationError('At inspection pose: confirm, reject with current evidence, or observe; the excluded previous goal has not changed', decision)
+    if selected and key and key != selected and action in {'select', 'observe'}:
+        item = memory.instances[key]
+        seen = memory.observations[-1]['seen']
+        if (key not in seen or item['views'] < 2 or
+                item['confidence'] < memory.instances[selected]['confidence']-.1 or
+                not isinstance(decision.get('switch_reason'), str) or not decision['switch_reason'].strip()):
+            raise DecisionValidationError('Target switch lacks repeated current evidence or switch_reason; re-observe the selected target instead', decision)
+        if task and item['category'] not in task['target_categories']:
+            raise DecisionValidationError('New target category does not match the task', decision)
+    if action == 'reject' and (task or {}).get('another'):
+        if decision.get('rejection_kind') not in {'category_mismatch', 'attribute_mismatch', 'relation_mismatch'}:
+            raise DecisionValidationError('Reject needs rejection_kind for an observed mismatch; reaching a new target is not a reason to reject it', decision)
 
 
 class VisualNavigator:
@@ -24,11 +45,14 @@ class VisualNavigator:
         self.event_callback = event_callback
         self.current_observation = None
         self.task = task
+        if task and task.get('another') and not task.get('excluded_goal'):
+            raise ValueError('“另一个”需要会话中已确认目标作为固定参照')
         self.categories = tuple(task["detection_categories"]) if task else COMMON_CATEGORIES
 
     def notify(self, phase):
         if self.event_callback:
             self.event_callback(dict(type='live_state', phase=phase, task=self.task, arrival_geometry=getattr(self, 'proximity', None),
+                                     excluded_candidate_ids=sorted(excluded_ids(self.task, self.memory.instances)),
                                      observation=self.current_observation, memory=self.memory.summary(),
                                      events=self.events[-100:], observations=len(self.memory.observations)-self.observation_offset,
                                      position=self.io.position.tolist(),
@@ -56,6 +80,7 @@ class VisualNavigator:
         selected, goal, exploration = None, None, None
         status, verified = 'budget_exhausted', False
         initial_scan, inspect_count = 0, 0
+        invalid_decisions = 0
         obs = None
         try:
             while len(self.memory.observations)-self.observation_offset < self.limit:
@@ -75,12 +100,27 @@ class VisualNavigator:
                 if self.mode == 'candidates' and selected:
                     raise RuntimeError('Internal ablation control error')
                 self.notify('thinking')
-                decision = self.policy.decide(instruction, obs, self.memory, selected, at_goal)
+                try:
+                    decision = self.policy.decide(instruction, obs, self.memory, selected, at_goal)
+                    validate_decision(decision, self.memory.instances, obs['id'],
+                                      self.memory.observations[-1]['seen'], selected, at_goal)
+                    validate_target_change(decision, self.memory, self.task, selected, at_goal)
+                except DecisionValidationError as exc:
+                    invalid_decisions += 1
+                    feedback = dict(observation_id=obs['id'], selected=selected, error=str(exc))
+                    self.policy.decision_feedback = (getattr(self.policy, 'decision_feedback', [])+[feedback])[-3:]
+                    self.record(dict(type='decision_retry', proposed_decision=exc.decision,
+                                     attempt=invalid_decisions, **feedback))
+                    if invalid_decisions >= 3:
+                        status = 'decision_unresolved'
+                        break
+                    # No movement or target change is authorized by an invalid decision.
+                    # Reacquire an actual observation; normal observation budget still applies.
+                    continue
                 if self.should_stop():
                     status = 'cancelled'
                     break
-                validate_decision(decision, self.memory.instances, obs['id'],
-                                  self.memory.observations[-1]['seen'], selected, at_goal)
+                invalid_decisions = 0
                 self.record(dict(type='decision', observation_id=obs['id'], **decision))
                 print(json.dumps(self.events[-1], ensure_ascii=False), flush=True)
                 action = decision['action']
@@ -179,6 +219,9 @@ class VisualNavigator:
                           vlm_calls=self.policy.calls, travel_budget_m=self.travel_budget,
                           events=self.events, memory=self.memory.summary())
             result['search_coverage'] = getattr(self.io, 'search_summary', lambda: None)()
+            result['excluded_candidate_ids'] = sorted(excluded_ids(self.task, self.memory.instances))
+            if status == 'decision_unresolved':
+                result['message'] = '连续三次决策缺少有效证据，机器人保持当前位置，目标尚未核实。'
             if status in {'search_complete_no_match', 'search_exhausted_unresolved', 'budget_exhausted'}:
                 result['message'] = {
                     'search_complete_no_match': '本轮可达搜索点已检查完，未发现符合条件的目标，停止搜索。',
