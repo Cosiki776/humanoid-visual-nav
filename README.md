@@ -1,5 +1,12 @@
 # ReplicaCAD GT → 路线规划 → Habitat 人形行走
 
+新增独立的 **RGB-D 视觉导航第一版**：启动、模型切换、GT 权限审计和四组评测见 [VISUAL_NAV.md](VISUAL_NAV.md)。
+CLI 入口为 `run_visual.py`。`serve.py` 现在默认打开视觉工作台；GT 基线位于 `/gt`，也可用 `serve.py --mode gt` 单独启动。
+
+视觉网页：在项目目录运行 `/home/caosiqi/miniconda3/envs/habitat/bin/python serve.py --port 8770`，打开 http://127.0.0.1:8770 。支持指令执行、停止、第三人称实时运动、第一人称关键帧、候选证据和历史记录。
+下文旧流程说明仍针对 GT 基线。
+实测结果与已知局限见 [VISUAL_VALIDATION.md](VISUAL_VALIDATION.md)。
+
 第一版使用静态 `apt_0`、全局 GT 和 Habitat 的 `KinematicHumanoid`。
 这是运动学角色演示，不是动力学机器人平衡控制，也不是视觉导航结果。
 所有新增代码、依赖和输出在本目录，复用上级目录的 ReplicaCAD 和 Habitat-Lab 源码。
@@ -71,7 +78,7 @@
 若模型请求报 TLS EOF，而直连阿里云正常，可仅为该域名绕过环境代理启动服务：
 
 ```bash
-NO_PROXY=dashscope.aliyuncs.com,127.0.0.1,localhost no_proxy=dashscope.aliyuncs.com,127.0.0.1,localhost /home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/serve.py --port 8767
+NO_PROXY=dashscope.aliyuncs.com,127.0.0.1,localhost no_proxy=dashscope.aliyuncs.com,127.0.0.1,localhost /home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/serve.py --mode gt --port 8767
 ```
 
 本机浏览器访问 `http://127.0.0.1:8767`；远程使用时需转发 8767 端口。
@@ -108,7 +115,7 @@ NO_PROXY=dashscope.aliyuncs.com,127.0.0.1,localhost no_proxy=dashscope.aliyuncs.
 
 ```bash
 unset NAV_LLM_BASE_URL NAV_LLM_MODEL NAV_LLM_API_KEY
-/home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/serve.py --port 8765
+/home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/serve.py --mode gt --port 8765
 ```
 
 浏览器访问 **http://127.0.0.1:8765**。不配置模型也能启动，展开页面的“离线目标测试”即可选择家具并连续执行。

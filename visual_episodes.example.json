@@ -1,0 +1,6 @@
+[
+  {"id":"apt0_white_seed7","scene":"apt_0","seed":7,"instruction":"走到任意一把白色椅子旁边","goal_ids":["frl_apartment_chair_04_:0000","frl_apartment_chair_04_:0001"]},
+  {"id":"apt0_brown_seed7","scene":"apt_0","seed":7,"instruction":"走到任意一把棕色椅子旁边","goal_ids":["frl_apartment_chair_05_:0000","frl_apartment_chair_05_:0001"]},
+  {"id":"apt0_red_absent_seed7","scene":"apt_0","seed":7,"instruction":"走到红色椅子旁边","goal_ids":[]},
+  {"id":"apt1_chair_seed7","scene":"apt_1","seed":7,"instruction":"走到任意一把椅子旁边","goal_ids":["frl_apartment_chair_01_:0000","frl_apartment_chair_01_:0001","frl_apartment_chair_04_:0000","frl_apartment_chair_04_:0001","frl_apartment_chair_05_:0000","frl_apartment_chair_05_:0001"]}
+]

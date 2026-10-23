@@ -1,0 +1,9 @@
+# Reference versions already installed in the habitat environment; do not blindly
+# reinstall over Habitat's torch/CUDA stack. See VISUAL_NAV.md for local weights.
+numpy==1.26.4
+Pillow==10.4.0
+torch==2.0.1
+torchvision==0.15.2
+transformers==4.41.2
+segment-anything==1.0
+safetensors==0.7.0

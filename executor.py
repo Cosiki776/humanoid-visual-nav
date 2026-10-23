@@ -49,7 +49,7 @@ class Executor:
     def position(self):
         return np.asarray(self.human.base_pos).copy()
 
-    def apply(self):
+    def apply(self, force_frame=False):
         if self.realtime:
             time.sleep(max(0, 1/30 - (time.monotonic()-self.last_tick)))
             self.last_tick = time.monotonic()
@@ -59,14 +59,17 @@ class Executor:
         self.world.sim.step_physics(1/30)
         self.trace.append(vector(self.position))
         self.frames += 1
-        if self.frame_callback and self.frames % 2 == 0:
+        if self.frame_callback and (force_frame or self.frames % 2 == 0):
             self.frame_callback(self.world.frame(self.position))
 
     def stop(self):
         self.controller.calculate_stop_pose()
-        self.apply()
+        # Always publish the settled pose, including odd-numbered final steps.
+        self.apply(force_frame=True)
 
-    def execute_segment(self, endpoint, max_steps=600, should_stop=None):
+    def execute_segment(self, endpoint, max_steps=600, should_stop=None, arrival_tolerance=0.08):
+        if not 0.005 <= arrival_tolerance <= 0.08:
+            raise ValueError("arrival_tolerance must be 0.005..0.08 metres")
         target = np.array(endpoint, dtype=float)
         if not self.world.direct(self.position, target):
             return {"status": "blocked", "reason": "segment is not directly traversable",
@@ -77,7 +80,7 @@ class Executor:
                 self.stop()
                 return {"status": "cancelled", "position": vector(self.position)}
             before = self.position
-            if np.linalg.norm(target-before) < 0.08:
+            if np.linalg.norm(target-before) < arrival_tolerance:
                 self.stop()
                 return {"status": "succeeded", "steps": step, "position": vector(self.position)}
             self.controller.calculate_walk_pose(mn.Vector3(target-before))

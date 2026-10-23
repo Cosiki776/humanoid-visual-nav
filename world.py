@@ -13,7 +13,7 @@ def vector(value):
 
 
 class World:
-    def __init__(self, scene="apt_0", radius=0.3, seed=7):
+    def __init__(self, scene="apt_0", radius=0.3, seed=7, rgbd=False):
         self.data = bootstrap.WORKSPACE / "data" / "replica_cad"
         cfg = habitat_sim.SimulatorConfiguration()
         cfg.scene_dataset_config_file = str(self.data / "replicaCAD.scene_dataset_config.json")
@@ -26,6 +26,15 @@ class World:
         sensor.position = mn.Vector3(0.0, 0.0, 0.0)
         agent = habitat_sim.agent.AgentConfiguration()
         agent.sensor_specifications = [sensor]
+        if rgbd:
+            # Opt-in keeps the original GT demo's sensor configuration unchanged.
+            depth = habitat_sim.CameraSensorSpec()
+            depth.uuid = "depth"
+            depth.sensor_type = habitat_sim.SensorType.DEPTH
+            depth.resolution = list(sensor.resolution)
+            depth.position = mn.Vector3(0.0, 0.0, 0.0)
+            depth.hfov = sensor.hfov
+            agent.sensor_specifications.append(depth)
         self.sim = habitat_sim.Simulator(habitat_sim.Configuration(cfg, [agent]))
         # Static demo: freeze clutter before rebuilding a body-size-aware NavMesh.
         for obj in self.sim.get_rigid_object_manager().get_objects_by_handle_substring().values():
