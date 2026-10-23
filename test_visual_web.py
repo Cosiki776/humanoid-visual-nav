@@ -3,10 +3,43 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 from visual_web import VisualApp
 
 class VisualWebTests(unittest.TestCase):
+    def test_stop_preserves_owner_and_reset_is_explicit(self):
+        app = VisualApp()
+        with tempfile.TemporaryDirectory() as tmp, patch('visual_web.bootstrap.ROOT', Path(tmp)):
+            session = Path(tmp)/'outputs'/app.session_id
+            session.mkdir(parents=True)
+            process = Mock()
+            process.poll.return_value = None
+            app.process = process
+            app.busy = True
+            previous = app.session_id
+            app.stop()
+            self.assertTrue((session/'cancel.request').exists())
+            process.terminate.assert_not_called()
+            with self.assertRaises(ValueError):
+                app.new_session()
+            app.busy = False
+            app.session_state = {'memory': {'instances': [dict(id='v0001')]}}
+            app.task_count = 2
+            state = app.new_session()
+            process.terminate.assert_called_once()
+            self.assertNotEqual(state['active_session_id'], previous)
+            self.assertEqual(state['task_count'], 0)
+            self.assertEqual(state['memory'], {})
+            self.assertIsNone(app.process)
+
+    def test_dead_session_does_not_silently_restart_at_origin(self):
+        app = VisualApp()
+        app.configured = True
+        app.process = Mock()
+        app.process.poll.return_value = 1
+        with self.assertRaisesRegex(ValueError, '新建会话'):
+            app.submit(dict(instruction='去沙发'))
+
     def test_assets_reject_traversal_and_non_image_files(self):
         app=VisualApp()
         with tempfile.TemporaryDirectory() as tmp, patch('visual_web.bootstrap.ROOT',Path(tmp)):

@@ -285,6 +285,38 @@ class LoopTests(unittest.TestCase):
             stalled = VisualNavigator(StalledIO(), Detector(), Policy(), tmp, mode='candidates').run('chair')
             self.assertEqual(stalled['status'], 'timeout')
             self.assertFalse(stalled['verified'])
+            class StepIO(IO):
+                def advance(self, endpoint, budget=1.0):
+                    delta = np.asarray(endpoint)-self.position
+                    distance = np.linalg.norm(delta)
+                    self.position = self.position + delta*min(1, budget/max(distance, 1e-9))
+                    return dict(status='succeeded', reached=bool(distance <= budget))
+            slow = VisualNavigator(StepIO(), Detector(), Policy(), tmp,
+                                   travel_budget=.5).run('chair')
+            fast = VisualNavigator(StepIO(), Detector(), Policy(), tmp).run('chair')
+            self.assertEqual(slow['observations'], 4)
+            self.assertEqual(fast['observations'], 2)
+            self.assertTrue(fast['verified'])
+            self.assertEqual(fast['events'][-1]['evidence_id'], 'o2')
+            for invalid in (0, 6, float('nan')):
+                with self.assertRaises(ValueError):
+                    VisualNavigator(IO(), Detector(), Policy(), tmp, travel_budget=invalid)
+            shared_io, shared_memory = IO(), ObjectMemory()
+            first = VisualNavigator(shared_io, Detector(), Policy(), tmp,
+                                    memory=shared_memory, max_observations=2).run('chair')
+            shared_io.start = shared_io.position.tolist()
+            second = VisualNavigator(shared_io, Detector(), Policy(), tmp,
+                                     memory=shared_memory, max_observations=2).run('chair')
+            self.assertEqual(first['final_position'], second['start_position'])
+            self.assertEqual(second['observations'], 2)
+            self.assertEqual(len(shared_memory.observations), 4)
+            self.assertEqual(len(shared_memory.instances), 1)
+            self.assertTrue(second['verified'])
+            cancelled = VisualNavigator(shared_io, Detector(), Policy(), tmp,
+                                        memory=shared_memory, should_stop=lambda: True).run('chair')
+            self.assertEqual(cancelled['status'], 'cancelled')
+            self.assertEqual(cancelled['observations'], 0)
+            self.assertEqual(len(shared_memory.instances), 1)
 
 
 

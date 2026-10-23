@@ -4,6 +4,7 @@
 CLI 入口为 `run_visual.py`。`serve.py` 现在默认打开视觉工作台；GT 基线位于 `/gt`，也可用 `serve.py --mode gt` 单独启动。
 
 视觉网页：在项目目录运行 `/home/caosiqi/miniconda3/envs/habitat/bin/python serve.py --port 8770`，打开 http://127.0.0.1:8770 。支持指令执行、停止、第三人称实时运动、第一人称关键帧、候选证据和历史记录。
+视觉页支持连续会话：后续指令从当前位置继续，保留视觉记忆并复用模型；“停止”保留现场，“新建会话”才重置。记录保存至 `outputs/visual_session_*/session.json`，页面刷新不影响会话；服务重启暂不自动恢复仿真状态。
 下文旧流程说明仍针对 GT 基线。
 实测结果与已知局限见 [VISUAL_VALIDATION.md](VISUAL_VALIDATION.md)。
 

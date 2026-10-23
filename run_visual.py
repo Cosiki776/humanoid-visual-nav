@@ -24,6 +24,7 @@ def main():
     p.add_argument('--policy', choices=['vlm', 'color'], default='vlm')
     p.add_argument('--vlm-model', help='Image-capable model; overrides NAV_VLM_MODEL')
     p.add_argument('--max-observations', type=int, default=24)
+    p.add_argument('--travel-budget', type=float, default=3.0, help='Maximum metres between target approach observations (0.25..5, default 3)')
     p.add_argument('--device', default='cuda:0')
     p.add_argument('--sam-checkpoint', default=str(bootstrap.WORKSPACE/'weights/sam_vit_b_01ec64.pth'))
     p.add_argument('--dino-model', default='IDEA-Research/grounding-dino-tiny')
@@ -105,7 +106,7 @@ def main():
             manifest = dict(detector.manifest, policy=type(policy).__name__,
                             vlm_model=getattr(policy, 'model', None), instruction_parse_seconds=parse_seconds, setup_seconds=time.monotonic()-setup_begin)
             (output/'models.json').write_text(json.dumps(manifest, indent=2))
-            navigator = VisualNavigator(io, detector, policy, output, args.mode, args.max_observations, task=task, event_callback=(lambda event: print(json.dumps(event, ensure_ascii=False), flush=True)) if args.live_events else None)
+            navigator = VisualNavigator(io, detector, policy, output, args.mode, args.max_observations, task=task, event_callback=(lambda event: print(json.dumps(event, ensure_ascii=False), flush=True)) if args.live_events else None, travel_budget=args.travel_budget)
             if args.mode == 'perception':
                 for index in range(min(args.max_observations, 8)):
                     navigator.observe(yaw=index*math.pi/2)

@@ -11,10 +11,15 @@ from .docking import arrival_geometry
 
 
 class VisualNavigator:
-    def __init__(self, io, detector, policy, output, mode='active_verify', max_observations=24, task=None, event_callback=None):
+    def __init__(self, io, detector, policy, output, mode='active_verify', max_observations=24, task=None, event_callback=None, travel_budget=3.0, memory=None, should_stop=None):
+        if not math.isfinite(travel_budget) or not 0.25 <= travel_budget <= 5.0:
+            raise ValueError('travel_budget must be 0.25..5.0 metres')
+        self.travel_budget = travel_budget
         self.io, self.detector, self.policy = io, detector, policy
         self.output, self.mode, self.limit = Path(output), mode, max_observations
-        self.memory = ObjectMemory()
+        self.memory = memory if memory is not None else ObjectMemory()
+        self.observation_offset = len(self.memory.observations)
+        self.should_stop = should_stop or (lambda: False)
         self.events = []
         self.event_callback = event_callback
         self.current_observation = None
@@ -25,7 +30,7 @@ class VisualNavigator:
         if self.event_callback:
             self.event_callback(dict(type='live_state', phase=phase, task=self.task, arrival_geometry=getattr(self, 'proximity', None),
                                      observation=self.current_observation, memory=self.memory.summary(),
-                                     events=self.events[-100:], observations=len(self.memory.observations),
+                                     events=self.events[-100:], observations=len(self.memory.observations)-self.observation_offset,
                                      position=self.io.position.tolist(),
                                      search_coverage=self.io.search_summary()))
 
@@ -53,9 +58,15 @@ class VisualNavigator:
         initial_scan, inspect_count = 0, 0
         obs = None
         try:
-            while len(self.memory.observations) < self.limit:
+            while len(self.memory.observations)-self.observation_offset < self.limit:
+                if self.should_stop():
+                    status = 'cancelled'
+                    break
                 kwargs = {'look_at': self.memory.instances[selected]['position']} if selected else {'yaw': initial_scan*math.pi/2}
                 obs = self.observe(**kwargs)
+                if self.should_stop():
+                    status = 'cancelled'
+                    break
                 proximity = arrival_geometry(self.io.position, self.memory.instances[selected]) if selected else None
                 self.proximity = proximity
                 at_goal = bool(selected and goal is not None and horizontal_distance(self.io.position, goal) < .18
@@ -65,6 +76,9 @@ class VisualNavigator:
                     raise RuntimeError('Internal ablation control error')
                 self.notify('thinking')
                 decision = self.policy.decide(instruction, obs, self.memory, selected, at_goal)
+                if self.should_stop():
+                    status = 'cancelled'
+                    break
                 validate_decision(decision, self.memory.instances, obs['id'],
                                   self.memory.observations[-1]['seen'], selected, at_goal)
                 self.record(dict(type='decision', observation_id=obs['id'], **decision))
@@ -129,7 +143,7 @@ class VisualNavigator:
                             break
                         continue
                     self.notify('moving')
-                    event = self.io.advance(goal)
+                    event = self.io.advance(goal, budget=self.travel_budget)
                     self.record(dict(type='execution', **event))
                     if event['status'] != 'succeeded':
                         self.memory.questions.append('Movement failed; target validity unresolved')
@@ -155,12 +169,15 @@ class VisualNavigator:
             self.record(dict(type='error', error=type(exc).__name__+': '+str(exc)))
             raise
         finally:
+            if self.should_stop():
+                status, verified = 'cancelled', False
             trace = self.io.trajectory()
             result = dict(status=status, mode=self.mode, policy=type(self.policy).__name__, instruction=instruction,
                           task=self.task, detection_categories=self.categories, selected=selected, verified=verified, start_position=self.io.start,
-                          final_position=self.io.position.tolist(), observations=len(self.memory.observations),
+                          final_position=self.io.position.tolist(), observations=len(self.memory.observations)-self.observation_offset,
                           elapsed_seconds=time.monotonic()-begin, path_length_m=path_length(trace),
-                          vlm_calls=self.policy.calls, events=self.events, memory=self.memory.summary())
+                          vlm_calls=self.policy.calls, travel_budget_m=self.travel_budget,
+                          events=self.events, memory=self.memory.summary())
             result['search_coverage'] = getattr(self.io, 'search_summary', lambda: None)()
             if status in {'search_complete_no_match', 'search_exhausted_unresolved', 'budget_exhausted'}:
                 result['message'] = {

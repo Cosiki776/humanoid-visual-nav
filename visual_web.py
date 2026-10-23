@@ -1,4 +1,4 @@
-"""Visual Web transport: subprocess isolation, visual evidence only, explicit run history."""
+"""Visual Web transport: persistent visual sessions, visual evidence only, explicit run history."""
 import copy
 import base64
 import json
@@ -27,6 +27,10 @@ class VisualApp:
         self.cancelled = False
         self.run_dir = None
         self.started = None
+        self.session_id = 'visual_session_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        self.session_state = {}
+        self.session_jpeg = None
+        self.task_count = 0
         self.state = dict(phase='idle', mode='visual', ready=True, events=[], memory={}, observations=0)
         config = load_model_settings()
         self.model = os.environ.get('NAV_VLM_MODEL', config['model'])
@@ -35,7 +39,7 @@ class VisualApp:
     def snapshot(self):
         with self.lock:
             result = copy.deepcopy(self.state)
-            result.update(busy=self.busy, scene=self.scene, model=self.model,
+            result.update(busy=self.busy, scene=self.scene, model=self.model, active_session_id=self.session_id, task_count=self.task_count,
                           configured=self.configured, observer_frame_id=self.frame_id, observer_available=self.jpeg is not None, run=self.run_dir.name if self.run_dir else None)
             if self.busy and self.started:
                 result['wall_seconds'] = round(time.monotonic()-self.started, 1)
@@ -88,13 +92,19 @@ class VisualApp:
                 raise ValueError('当前任务正在执行，请先停止或等待完成')
             if not self.configured:
                 raise ValueError('请先配置视觉模型 API 后重启服务')
+            if self.process is not None and self.process.poll() is not None:
+                raise ValueError('会话进程已退出，当前位置无法继续；请新建会话，不会自动回到起点')
             self.busy, self.cancelled = True, False
-            self.jpeg = None
+            self.jpeg = self.session_jpeg
             self.frame_id += 1
             self.started = time.monotonic()
             self.run_dir = bootstrap.ROOT/'outputs'/('web_visual_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
+            session_dir = bootstrap.ROOT/'outputs'/self.session_id
+            session_dir.mkdir(parents=True, exist_ok=True)
+            (session_dir/'cancel.request').unlink(missing_ok=True)
             self.state = dict(phase='loading', mode='visual', replay=False, ready=True,
-                              instruction=instruction.strip(), events=[], memory={}, observations=0, budget=budget)
+                              session_id=self.session_id, position=self.session_state.get('final_position', self.session_state.get('position')),
+                              instruction=instruction.strip(), events=[], memory=self.session_state.get('memory', {}), observations=0, budget=budget)
             thread = threading.Thread(target=self.worker, args=(instruction.strip(),budget,self.run_dir), daemon=True)
             thread.start()
             return dict(status='accepted', run=self.run_dir.name)
@@ -104,23 +114,54 @@ class VisualApp:
             if self.busy:
                 self.cancelled = True
                 self.state['phase'] = 'stopping'
-                if self.process and self.process.poll() is None:
-                    self.process.terminate()
+                (bootstrap.ROOT/'outputs'/self.session_id/'cancel.request').touch()
+            if self.shutdown.is_set() and self.process and self.process.poll() is None:
+                self.process.terminate()
+
+    def new_session(self):
+        with self.lock:
+            if self.busy:
+                raise ValueError('请先停止当前任务，待机器人停止后再新建会话')
+            if self.process and self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=5)
+            if self.process:
+                for pipe in (self.process.stdin, self.process.stdout):
+                    if pipe:
+                        pipe.close()
+            self.process = None
+            self.session_id = 'visual_session_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            self.session_state, self.session_jpeg = {}, None
+            self.task_count = 0
+            self.jpeg, self.run_dir = None, None
+            self.frame_id += 1
+            self.state = dict(phase='idle', mode='visual', replay=False, ready=True,
+                              events=[], memory={}, observations=0)
+            return self.snapshot()
 
     def worker(self, instruction, budget, output):
-        process = None
         try:
             log = output.parent/(output.name+'.log')
-            command = [sys.executable, '-u', str(bootstrap.ROOT/'run_visual.py'), '--live-events', '--observer-stream',
-                       '--scene', self.scene, '--vlm-model', self.model, '--instruction',instruction,
-                       '--max-observations',str(budget), '--output',str(output)]
             with log.open('w') as logfile:
                 with self.lock:
-                    if self.cancelled:
-                        return
-                    process = subprocess.Popen(command, cwd=bootstrap.ROOT, stdout=subprocess.PIPE,
-                                               stderr=logfile, text=True, bufsize=1)
-                    self.process = process
+                    if self.process is None:
+                        session_dir = bootstrap.ROOT/'outputs'/self.session_id
+                        command = [sys.executable, '-u', str(bootstrap.ROOT/'run_visual_session.py'),
+                                   '--scene', self.scene, '--vlm-model', self.model,
+                                   '--session-dir', str(session_dir)]
+                        with (session_dir/'worker.log').open('a') as errors:
+                            self.process = subprocess.Popen(command, cwd=bootstrap.ROOT,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
+                                text=True, bufsize=1)
+                    process = self.process
+                    process.stdin.write(json.dumps(dict(instruction=instruction,
+                        max_observations=budget, output=str(output)), ensure_ascii=False)+'\n')
+                    process.stdin.flush()
+                completed = False
                 for line in process.stdout:
                     try:
                         event = json.loads(line)
@@ -131,6 +172,7 @@ class VisualApp:
                     if event.get('type') == 'observer_frame':
                         with self.lock:
                             self.jpeg = base64.b64decode(event['jpeg'])
+                            self.session_jpeg = self.jpeg
                             self.frame_id += 1
                         continue
                     logfile.write(line)
@@ -138,34 +180,34 @@ class VisualApp:
                     with self.lock:
                         if event.get('type') == 'live_state':
                             self.state.update({k:v for k,v in event.items() if k!='type'})
+                            if self.cancelled:
+                                self.state['phase'] = 'stopping'
                         elif event.get('type') == 'run_error':
                             self.state.update(phase='error', error=event.get('message'), error_type=event.get('error_type'))
                         elif event.get('type') == 'task':
                             self.state.update(task=event['task'], phase='perception',
                                               instruction_parse_seconds=event.get('parse_seconds'))
-                process.wait()
-            with self.lock:
-                if self.cancelled:
-                    self.state['phase'] = 'cancelled'
-                elif (output/'result.json').exists():
-                    result = json.loads((output/'result.json').read_text())
-                    result.pop('selected_points',None)
-                    self.state.update(result, phase=result['status'])
-                else:
-                    self.state.update(phase='error', error=self.state.get('error') or '任务未正常完成，请查看本次运行日志：'+log.name)
+                        elif event.get('type') == 'task_done':
+                            if event.get('run') != output.name:
+                                raise RuntimeError('Session task response mismatch')
+                            completed = True
+                            break
+                with self.lock:
+                    if completed and (output/'result.json').exists():
+                        result = json.loads((output/'result.json').read_text())
+                        result.pop('selected_points',None)
+                        self.state.update(result, phase=result['status'])
+                        self.task_count += 1
+                    else:
+                        self.state.update(phase='error', error='会话进程异常退出，请检查会话 worker.log 并新建会话')
         except Exception as exc:
             with self.lock:
                 self.state.update(phase='error',error=type(exc).__name__+': '+str(exc))
         finally:
             with self.lock:
-                if self.cancelled:
-                    self.state['phase']='cancelled'
                 self.busy = False
-                self.process = None
                 self.state['wall_seconds'] = round(time.monotonic()-self.started,1)
-                # Terminated runs preserve browser-visible evidence without claiming completion.
-                if self.cancelled and output.exists():
-                    (output/'web_cancelled.json').write_text(json.dumps(self.state,ensure_ascii=False,indent=2))
+                self.session_state = copy.deepcopy(self.state)
 
     def asset(self, run, name):
         if not re.fullmatch(r'[A-Za-z0-9_-]+',run) or not re.fullmatch(r'(?:observer_last|obs_\d+(?:_\d+_(?:crop|mask))?)\.(?:jpg|png)',name):
@@ -285,6 +327,8 @@ def handler_for_visual(app, legacy_factory):
                     return self.body(202,app.submit(data))
                 if self.path=='/api/load':
                     return self.body(200,app.load(data.get('run')))
+                if self.path=='/api/session/new':
+                    return self.body(200,app.new_session())
                 if self.path=='/api/stop':
                     app.stop()
                     return self.body(200,dict(status='stop_requested'))

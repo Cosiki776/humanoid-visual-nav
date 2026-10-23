@@ -39,6 +39,7 @@ class HabitatIO:
         self.last_motion = None
         self._roadmap = None
         self._search = None
+        self.should_stop = lambda: False
         if frame_callback:
             frame_callback(self._world.frame(self.position))
 
@@ -73,6 +74,19 @@ class HabitatIO:
 
     def close(self):
         self._world.close()
+
+    def begin_task(self, output, should_stop=None):
+        """Keep the simulator/body/observation IDs; reset only task-local accounting."""
+        self.output = Path(output)
+        self.output.mkdir(parents=True, exist_ok=True)
+        self.start = self.position.tolist()
+        self._executor.trace.clear()
+        self._executor.trace.append(self.start)
+        self.visited = [self.start]
+        self.last_motion = None
+        # Coverage is instruction-dependent: old views may not have detected the new noun.
+        self._search = None
+        self.should_stop = should_stop or (lambda: False)
 
     def observe(self, yaw=None, look_at=None):
         import magnum as mn
@@ -202,7 +216,7 @@ class HabitatIO:
                 fallback = True
             self.yaw = math.atan2(delta[0], -delta[2])
             previous = self.position.copy()
-            event = self._executor.execute_segment(target, arrival_tolerance=.02)
+            event = self._executor.execute_segment(target, arrival_tolerance=.02, should_stop=self.should_stop)
             event['waypoint'] = target.tolist()
             remaining -= np.linalg.norm(self.position-previous)
             if event['status'] != 'succeeded' or remaining < .10 or fallback:

@@ -370,6 +370,10 @@ def main():
         thread.start()
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Browser: http://{args.host}:{args.port} (waiting for scene)", flush=True)
+    import signal
+    def terminate_service(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, terminate_service)
     try:
         server.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:
