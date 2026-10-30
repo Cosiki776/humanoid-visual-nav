@@ -1,3 +1,5 @@
+新版 P1–P4（身份与搜索、视图记忆、关系观察、异步执行）：见 [NAV_IMPROVEMENTS.md](NAV_IMPROVEMENTS.md)。
+
 # 视觉导航第一版
 
 本版任务设定是**几何、NavMesh、机器人定位已知，物体语义和目标位置来自在线 RGB-D**。

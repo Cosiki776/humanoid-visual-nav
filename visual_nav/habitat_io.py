@@ -75,6 +75,9 @@ class HabitatIO:
     def position(self):
         return self._executor.position
 
+    def settle(self):
+        self._executor.stop()
+
     def close(self):
         self._world.close()
 
@@ -125,13 +128,14 @@ class HabitatIO:
         k = np.array([[f, 0, (w-1)/2], [0, f, (h-1)/2], [0, 0, 1]])
         self.counter += 1
         key = 'obs_%05d' % self.counter
-        if look_at is None:
-            self._search_state().record_view(self.position, self.yaw, key)
         rgb_path = self.output/(key+'.jpg')
         Image.fromarray(rgb).save(rgb_path, quality=95)
         np.savez_compressed(self.output/(key+'.npz'), depth=depth, intrinsics=k, camera_to_world=pose)
-        return dict(id=key, rgb=rgb, depth=depth, intrinsics=k, camera_to_world=pose,
+        observation = dict(id=key, rgb=rgb, depth=depth, intrinsics=k, camera_to_world=pose,
                     rgb_path=str(rgb_path), time=time.time(), position=self.position.tolist(), yaw=self.yaw)
+        if look_at is None:
+            self._search_state().record_view(self.position, self.yaw, key, observation)
+        return observation
 
     def route(self, endpoint):
         import habitat_sim
@@ -187,7 +191,37 @@ class HabitatIO:
                 options.append((band, path_length(path), point))
         return [point for _, _, point in sorted(options, key=lambda x: (x[0], x[1]))]
 
-    def advance(self, endpoint, budget=1.0):
+    def inspection_options(self, instance, reference=None, historical=(), visited=()):
+        from .inspection import joint_aim, rank_viewpoints
+        import habitat_sim
+        import magnum as mn
+        center = joint_aim(instance, reference)
+        queries = [np.asarray(v['position']) for v in historical]
+        queries += self.docking_options(instance)
+        for radius in (1., 1.8, 2.5):
+            for angle in np.linspace(0, 2*math.pi, 16, endpoint=False):
+                queries.append(np.array([center[0]+radius*math.cos(angle), self.position[1],
+                                         center[2]+radius*math.sin(angle)]))
+        points, used = [], set()
+        for query in queries:
+            point = np.asarray(self._world.pf.snap_point(query, self._world.island))
+            key = tuple(np.round(point, 2))
+            if np.isfinite(point).all() and np.linalg.norm(point-query) < .15 and key not in used:
+                used.add(key)
+                points.append(point)
+        def visible(eye, item):
+            ray = np.asarray(item['position'])-eye
+            distance = np.linalg.norm(ray)
+            if distance < .15:
+                return False
+            hits = self._world.sim.cast_ray(habitat_sim.geo.Ray(
+                mn.Vector3(eye), mn.Vector3(ray/distance))).hits
+            distances = [h.ray_distance for h in hits if h.object_id != self._world.human_id and h.ray_distance > .05]
+            extent = np.linalg.norm(np.asarray(item['bbox_max'])-item['bbox_min'])/2
+            return not distances or min(distances) >= distance-extent-.15
+        return rank_viewpoints(points, self.position, instance, reference, self.route, visible, visited)
+
+    def advance(self, endpoint, budget=1.0, on_step=None):
         """Travel <= budget metres along NavMesh path, checking every controller step."""
         route = self._roadmap.path(self.position, endpoint) if self._roadmap else self.route(endpoint)
         if route is None:
@@ -195,7 +229,11 @@ class HabitatIO:
         before = len(self._executor.trace)
         remaining = budget
         event = dict(status='succeeded')
-        for point in route[1:]:
+        pending = list(route[1:])
+        segments = 0
+        while pending and segments < 80:
+            point = pending.pop(0)
+            segments += 1
             delta = point-self.position
             length = np.linalg.norm(delta)
             if length < .02:
@@ -217,13 +255,18 @@ class HabitatIO:
                 length = np.linalg.norm(delta)
                 target = self.position + delta*min(1, remaining/max(length, 1e-6))
                 fallback = True
+                if on_step is not None:
+                    pending = list(alternative[2:])
             self.yaw = math.atan2(delta[0], -delta[2])
             previous = self.position.copy()
-            event = self._executor.execute_segment(target, arrival_tolerance=.02, should_stop=self.should_stop)
+            event = self._executor.execute_segment(target, arrival_tolerance=.02, should_stop=self.should_stop,
+                on_step=on_step, settle=on_step is None)
             event['waypoint'] = target.tolist()
             remaining -= np.linalg.norm(self.position-previous)
-            if event['status'] != 'succeeded' or remaining < .10 or fallback:
+            if event['status'] != 'succeeded' or remaining < .10 or (fallback and on_step is None):
                 break
+        if on_step is not None:
+            self._executor.stop()
         self.visited.append(self.position.tolist())
         self.last_motion = dict(event, travelled=path_length(list(self._executor.trace)[max(0,before-1):]),
                                 position=self.position.tolist(), reached=horizontal_distance(self.position, endpoint) < .15)

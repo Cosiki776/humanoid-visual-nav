@@ -5,6 +5,8 @@ mode="${1:-local}"
 if [[ $# -gt 0 ]]; then shift; fi
 # This affects only the simulator/perception process, not the existing Ollama server.
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+export NAV_EXECUTION_MODE="${NAV_EXECUTION_MODE:-async}"
+export NAV_IMAGE_POLICY="${NAV_IMAGE_POLICY:-adaptive}"
 export NO_PROXY="${NO_PROXY:+$NO_PROXY,}dashscope.aliyuncs.com,127.0.0.1,localhost"
 export no_proxy="$NO_PROXY"
 case "$mode" in

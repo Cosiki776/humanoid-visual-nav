@@ -97,15 +97,23 @@ class VLMPolicy:
         seen = memory.observations[-1]['seen']
         rejected = {r['id'] for r in summary['rejections']}
         task = getattr(self, 'task', {})
-        excluded = excluded_ids(task, memory.instances)
+        excluded = excluded_ids(task, memory.instances) | set(getattr(self, 'deferred_candidate_ids', []))
         ranked = sorted((item for item in summary['instances'] if item['id'] not in excluded), key=lambda i: (
             i['id'] != selected, i['category'] not in task.get('target_categories', []),
             i['id'] not in seen, i['id'] in rejected, -i['confidence']))
-        # Reserve evidence slots for relation landmarks even in crowded target scenes.
+        image_mode = os.environ.get('NAV_IMAGE_POLICY', 'adaptive')
+        if image_mode not in {'adaptive', 'legacy'}:
+            raise ValueError('NAV_IMAGE_POLICY must be adaptive or legacy')
+        stage = 'verify' if at_goal else 'approach' if selected else 'search'
+        expanded = bool(getattr(self, 'expand_evidence', False))
+        limit = 10 if image_mode == 'legacy' or expanded else (3 if selected else 5)
         references = sorted((i for i in ranked if i['category'] in task.get('reference_categories', [])),
-                            key=lambda i: (i['id'] not in seen, -i['confidence']))[:3]
+                            key=lambda i: (i['id'] not in seen, -i['confidence']))[:(3 if limit == 10 else 1)]
         reference_ids = {i['id'] for i in references}
-        candidates = ([i for i in ranked if i['id'] not in reference_ids][:10-len(references)] + references)
+        pool = [i for i in ranked if i['id'] not in reference_ids]
+        if image_mode == 'adaptive' and task.get('target_categories'):
+            pool = [i for i in pool if i['category'] in task['target_categories'] or i['id'] == selected]
+        candidates = pool[:limit-len(references)] + references
         allowed = {i['id'] for i in candidates}
         relations = sorted((edge for edge in summary.get('relations', [])
                             if edge['source'] in allowed and edge['target'] in allowed),
@@ -113,7 +121,7 @@ class VLMPolicy:
                                              edge['last_checked'] != observation['id'],
                                              selected not in (edge['source'], edge['target']),
                                              -edge['confidence']))[:24]
-        context = dict(arrival_geometry=arrival_geometry(observation['position'], memory.instances[selected]) if selected else None, task=getattr(self, 'task', None), instruction=instruction, observation_id=observation['id'],
+        context = dict(input_stage=stage, image_policy=image_mode, evidence_expanded=expanded, arrival_geometry=arrival_geometry(observation['position'], memory.instances[selected]) if selected else None, task=getattr(self, 'task', None), instruction=instruction, observation_id=observation['id'],
                        selected=selected, at_goal=at_goal, currently_seen=seen,
                        excluded_candidate_ids=sorted(excluded),
                        decision_feedback=getattr(self, 'decision_feedback', [])[-3:],
@@ -163,10 +171,15 @@ class VLMPolicy:
         for item in candidates:
             evidence = item['evidence'][-1]
             add_image(evidence['crop'], item['id']+' from '+evidence['observation_id'])
-        # Cropped masks hide the surroundings: include up to two actual joint-view
-        # source images for relation tasks, rather than asking the model to trust edges.
-        if task.get('relation'):
-            image_ids = {observation['id']}
+        # Retrieve context, not every historical frame. Actual source IDs travel
+        # with each image; a past joint view never counts as fresh confirmation.
+        image_ids = {observation['id']}
+        if image_mode == 'adaptive' and task.get('relation'):
+            evidence_ids = reference_ids | ({selected} if selected else {i['id'] for i in candidates[:1]})
+            for view in memory.views.retrieve(evidence_ids, exclude=image_ids, limit=1):
+                add_image(view['rgb'], 'historical scene view '+view['id']+' visible IDs '+','.join(view['seen']))
+                image_ids.add(view['id'])
+        elif task.get('relation'):
             for edge in relations:
                 evidence = edge['evidence'][-1]
                 if edge['status']=='contradicted' or evidence['observation_id'] in image_ids:
@@ -175,8 +188,14 @@ class VLMPolicy:
                 image_ids.add(evidence['observation_id'])
                 if len(image_ids) >= 3:
                     break
+        self.last_input = dict(stage=stage, image_policy=image_mode,
+                               candidate_ids=[i['id'] for i in candidates],
+                               scene_view_ids=sorted(image_ids-{observation['id']}),
+                               image_count=sum(i['type']=='image_url' for i in content))
         decision = self._request(system, content)
-        return validate_decision(decision, allowed, observation['id'], seen, selected, at_goal)
+        decision = validate_decision(decision, allowed, observation['id'], seen, selected, at_goal)
+        self.expand_evidence = decision['action'] in {'observe', 'uncertain'}
+        return decision
 
     def _request(self, system, content):
         from .transport import request_json

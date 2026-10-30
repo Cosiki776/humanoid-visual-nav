@@ -21,6 +21,10 @@ class CoverageSearch:
     def next_view(self, position):
         """Skip sweeps when all nearby reachable samples were already checked."""
         position = np.asarray(position)
+        # A completed sweep must lead to translation, even if depth left nearby
+        # samples occluded. Repeating the same panorama adds no coverage.
+        if any(np.linalg.norm(position-np.asarray(scan['position'])) < .25 for scan in self.scans):
+            return None
         pending = set(range(len(self.points)))-self.covered-self.blocked
         if not any(np.linalg.norm(self.points[i]-position) <= self.radius and
                    self.direct(position, self.points[i]) for i in pending):
@@ -29,13 +33,21 @@ class CoverageSearch:
         observed = scan['directions'] if scan else {}
         return next((direction*math.pi/2 for direction in range(4) if direction not in observed), None)
 
-    def record_view(self, position, yaw, observation_id):
+    def record_view(self, position, yaw, observation_id, observation=None):
         position = np.asarray(position)
         # A full sweep must be taken at the same physical location, not accumulated along a path.
         scan = next((s for s in self.partial if np.linalg.norm(position-s['position']) < .25), None)
         if scan is None:
-            scan = dict(position=position.copy(), directions={})
+            scan = dict(position=position.copy(), directions={}, visible=set(), depth_checked=False)
             self.partial.append(scan)
+        if observation is not None:
+            from .geometry import visible_points
+            # Sample near the floor AND at object height. Occluded columns remain pending.
+            samples = self.points.copy()
+            samples[:, 1] += .8
+            visible = visible_points(samples, observation) | visible_points(self.points, observation)
+            scan['visible'].update(np.flatnonzero(visible).tolist())
+            scan['depth_checked'] = True
         direction = int(round(yaw/(math.pi/2))) % 4
         scan['directions'][direction] = observation_id
         if len(scan['directions']) != 4:
@@ -43,7 +55,8 @@ class CoverageSearch:
         evidence = dict(position=scan['position'].tolist(), observations=list(scan['directions'].values()))
         # Do not mark a nearby sample across a wall as searched.
         for index, point in enumerate(self.points):
-            if np.linalg.norm(point-position) <= self.radius and self.direct(position, point):
+            if (np.linalg.norm(point-position) <= self.radius and self.direct(position, point)
+                    and (not scan['depth_checked'] or index in scan['visible'] or np.linalg.norm(point-position) < .25)):
                 self.covered.add(index)
                 self.blocked.discard(index)
         self.scans.append(evidence)

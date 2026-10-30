@@ -30,3 +30,21 @@ def horizontal_distance(a, b):
 def path_length(points):
     p = np.asarray(points)
     return float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum()) if len(p) > 1 else 0.0
+
+
+def visible_points(points, observation, tolerance=.25):
+    """Depth-tested projected samples; visibility is not semantic absence."""
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    pose, k = np.asarray(observation['camera_to_world']), np.asarray(observation['intrinsics'])
+    local = (points-pose[:3, 3]) @ pose[:3, :3]
+    z = -local[:, 2]
+    safe_z = np.maximum(z, 1e-6)
+    u = np.rint(k[0, 0]*local[:, 0]/safe_z+k[0, 2]).astype(int)
+    v = np.rint(-k[1, 1]*local[:, 1]/safe_z+k[1, 2]).astype(int)
+    depth = np.asarray(observation['depth'])
+    h, w = depth.shape
+    valid = (z > .15) & (z < 8) & (u >= 0) & (u < w) & (v >= 0) & (v < h)
+    indexes = np.flatnonzero(valid)
+    measured = depth[v[indexes], u[indexes]]
+    valid[indexes] &= np.isfinite(measured) & (measured > .15) & (z[indexes] <= measured+tolerance)
+    return valid

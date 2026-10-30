@@ -3,6 +3,7 @@ import copy
 import numpy as np
 from .geometry import horizontal_distance
 from .relations import RelationMemory
+from .views import ViewMemory
 
 
 class ObjectMemory:
@@ -13,23 +14,32 @@ class ObjectMemory:
         self.rejections = []
         self.questions = []
         self.relations = RelationMemory()
+        self.views = ViewMemory()
 
     def integrate(self, detections, observation):
-        used, seen, fresh = set(), [], {}
-        for detection in sorted(detections, key=lambda d: -d['confidence']):
+        seen, fresh = [], {}
+        # Match the whole frame before updating any instance. Confidence order must
+        # not let an ambiguous detection steal the best match of another object.
+        prepared, pairs = [], []
+        for index, detection in enumerate(detections):
             points = np.asarray(detection['points'])
             center = np.median(points, axis=0)
             lo, hi = np.quantile(points, [0.05, 0.95], axis=0)
-            options = []
+            prepared.append((detection, points, center, lo, hi))
             for key, old in self.instances.items():
-                if key in used or old['category'] != detection['category']:
+                if old['category'] != detection['category']:
                     continue
                 distance = horizontal_distance(center, old['position'])
-                # Reject vertically disjoint/remote instances; never merge two masks in one frame.
-                overlap = np.minimum(hi, old['bbox_max']) - np.maximum(lo, old['bbox_min'])
-                if distance < self.merge_distance and np.all(overlap > -0.12):
-                    options.append((distance, key))
-            key = min(options)[1] if options else 'v%04d' % (len(self.instances)+1)
+                overlap = np.minimum(hi, old['bbox_max'])-np.maximum(lo, old['bbox_min'])
+                if distance < self.merge_distance and np.all(overlap > -.12):
+                    pairs.append((distance, index, key))
+        assignment, used = {}, set()
+        for _, index, key in sorted(pairs):
+            if index not in assignment and key not in used:
+                assignment[index] = key
+                used.add(key)
+        for index, (detection, points, center, lo, hi) in enumerate(prepared):
+            key = assignment.get(index) or 'v%04d' % (len(self.instances)+1)
             evidence = {k: detection[k] for k in ('crop', 'mask', 'confidence', 'attributes')}
             evidence.update(observation_id=observation['id'], time=observation['time'],
                             camera_position=observation['camera_to_world'][:3, 3].tolist())
@@ -62,6 +72,7 @@ class ObjectMemory:
                                   'seen': seen, 'time': observation['time'],
                                   'meaning': 'visible detections only; absence is not evidence of an empty region'})
         self.relations.update(fresh, observation)
+        self.views.add(observation, seen)
         return seen
 
     def reject(self, key, observation_id, reason):
@@ -73,4 +84,4 @@ class ObjectMemory:
         return {'instances': [{k: copy.deepcopy(v) for k, v in item.items() if k != 'points'}
                               for item in self.instances.values()],
                 'rejections': copy.deepcopy(self.rejections), 'unresolved': list(self.questions),
-                'relations': self.relations.summary()}
+                'relations': self.relations.summary(), 'scene_views': self.views.summary()}

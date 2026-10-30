@@ -1,3 +1,5 @@
+新版 P1–P4（身份与搜索、视图记忆、关系观察、异步执行）：见 [NAV_IMPROVEMENTS.md](NAV_IMPROVEMENTS.md)。
+
 # ReplicaCAD GT → 路线规划 → Habitat 人形行走
 
 新增独立的 **RGB-D 视觉导航第一版**：启动、模型切换、GT 权限审计和四组评测见 [VISUAL_NAV.md](VISUAL_NAV.md)。

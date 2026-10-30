@@ -80,7 +80,7 @@ class RelationTests(unittest.TestCase):
             self.assertFalse(context['relations'][0]['current'])
             self.assertNotIn('DO_NOT_SEND', json.dumps(content))
             self.assertNotIn(tmp, json.dumps(context))
-            self.assertIn('historical joint view o1', [x.get('text') for x in content])
+            self.assertTrue(any(x.get('text', '').startswith('historical scene view o1 visible IDs ') for x in content))
             self.assertEqual(sum(x['type']=='image_url' for x in content), 4)
 
 

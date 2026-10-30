@@ -67,7 +67,7 @@ class Executor:
         # Always publish the settled pose, including odd-numbered final steps.
         self.apply(force_frame=True)
 
-    def execute_segment(self, endpoint, max_steps=600, should_stop=None, arrival_tolerance=0.08):
+    def execute_segment(self, endpoint, max_steps=600, should_stop=None, arrival_tolerance=0.08, on_step=None, settle=True):
         if not 0.005 <= arrival_tolerance <= 0.08:
             raise ValueError("arrival_tolerance must be 0.005..0.08 metres")
         target = np.array(endpoint, dtype=float)
@@ -79,9 +79,13 @@ class Executor:
             if should_stop and should_stop():
                 self.stop()
                 return {"status": "cancelled", "position": vector(self.position)}
+            if on_step and on_step():
+                self.stop()
+                return {"status": "interrupted", "reason": "new visual evidence", "position": vector(self.position)}
             before = self.position
             if np.linalg.norm(target-before) < arrival_tolerance:
-                self.stop()
+                if settle:
+                    self.stop()
                 return {"status": "succeeded", "steps": step, "position": vector(self.position)}
             self.controller.calculate_walk_pose(mn.Vector3(target-before))
             candidate = np.asarray(self.controller.obj_transform_base.translation) - [0, 0.9, 0]
