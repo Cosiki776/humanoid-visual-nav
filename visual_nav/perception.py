@@ -81,5 +81,6 @@ class GroundedSAM:
                 Image.fromarray(mask.astype('uint8')*255).save(mask_path)
                 results.append(dict(category=category, confidence=float(boxes['scores'][index]),
                                     points=points, crop=str(crop_path), mask=str(mask_path),
+                                    bbox_2d=[int(xs.min()), int(ys.min()), int(xs.max()+1), int(ys.max()+1)],
                                     attributes={'color_scores': color_scores(rgb, mask)}))
         return results

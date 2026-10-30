@@ -1,3 +1,5 @@
+记忆与关系任务最新改造、使用与限制：见 [MEMORY_CHANGES.md](MEMORY_CHANGES.md)。
+
 新版 P1–P4（身份与搜索、视图记忆、关系观察、异步执行）：见 [NAV_IMPROVEMENTS.md](NAV_IMPROVEMENTS.md)。
 
 # ReplicaCAD GT → 路线规划 → Habitat 人形行走

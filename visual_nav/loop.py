@@ -15,13 +15,16 @@ from .inspection import reference_for, joint_aim
 
 def validate_target_change(decision, memory, task, selected, at_goal):
     action, key = decision['action'], decision.get('candidate_id')
+    if action in {'select', 'observe', 'confirm'} and memory.ledger.blocked(key, task, decision.get('reference_id')):
+        raise DecisionValidationError('Persistent negative evidence or exhausted inspection forbids this candidate/pair', decision)
     if action in {'select', 'observe', 'confirm'} and key in (task or {}).get('deferred_candidate_ids', []):
         raise DecisionValidationError('Candidate inspection budget exhausted for this task; search elsewhere', decision)
     if action in {'select', 'observe', 'confirm'} and key in excluded_ids(task, memory.instances):
         raise DecisionValidationError('This is the fixed previous goal, not another object', decision)
     if selected and at_goal and action in {'explore', 'uncertain'}:
         raise DecisionValidationError('At inspection pose: confirm, reject with current evidence, or observe; the excluded previous goal has not changed', decision)
-    if selected and key and key != selected and action in {'select', 'observe'}:
+    selected_is_anchor = bool(task and selected and memory.instances[selected]['category'] in task.get('reference_categories', []))
+    if selected and key and key != selected and action in {'select', 'observe'} and not selected_is_anchor:
         item = memory.instances[key]
         seen = memory.observations[-1]['seen']
         if (key not in seen or item['views'] < 2 or
@@ -70,6 +73,7 @@ class VisualNavigator:
         self.event_callback = event_callback
         self.current_observation = None
         self.task = task
+        self.memory.ledger.begin(task)
         self.inspection_counts = {}
         self.deferred = set()
         self.inspection_positions = {}
@@ -77,9 +81,62 @@ class VisualNavigator:
             raise ValueError('“另一个”需要会话中已确认目标作为固定参照')
         self.categories = tuple(task["detection_categories"]) if task else COMMON_CATEGORIES
 
+    def guard_decision(self, decision, selected, at_goal):
+        task = self.task or {}
+        ledger = self.memory.ledger
+        action, key = decision['action'], decision.get('candidate_id')
+        def explore(reason):
+            self.record(dict(type='action_guard', proposed_decision=decision, reason=reason))
+            return dict(action='explore', candidate_id=None, reason=reason)
+        if action in {'select', 'observe', 'confirm'} and ledger.blocked(key, task, decision.get('reference_id')):
+            return explore('Candidate or pair has negative evidence / exhausted inspection; continue search')
+        if action == 'reject' and decision.get('rejection_kind') == 'relation_mismatch':
+            reference = decision.get('reference_id')
+            if reference not in self.memory.observations[-1]['seen'] or reference == key:
+                return dict(decision, rejection_kind='insufficient_evidence')
+        if not task.get('relation'):
+            return decision
+        # An anchor may be approached to inspect it, but is never the task goal.
+        is_anchor = key in self.memory.instances and self.memory.instances[key]['category'] in task.get('reference_categories', [])
+        current = self.memory.observations[-1]
+        assessment = decision.get('anchor_assessment')
+        if isinstance(assessment, dict):
+            anchor = assessment.get('id')
+            if (anchor in current['seen'] and anchor in self.memory.instances and
+                    self.memory.instances[anchor]['category'] in task.get('reference_categories', []) and
+                    assessment.get('evidence_id') == current['id'] and str(assessment.get('reason') or '').strip()):
+                category = self.memory.instances[anchor]['category']
+                if assessment.get('matches') is True and ledger.anchor_verdict(anchor, category) is not False:
+                    ledger.anchors[anchor] = dict(verified=True, category=category, evidence_id=current['id'], reason=assessment['reason'])
+                elif assessment.get('matches') is False:
+                    ledger.anchors[anchor] = dict(verified=False, category=category, evidence_id=current['id'], reason=assessment['reason'])
+                    ledger.deferred.add(anchor)
+        if (selected and action == 'explore' and selected in ledger.anchors and
+                self.memory.instances[selected]['category'] in task.get('reference_categories', [])):
+            return explore('Anchor assessment recorded; continue target search')
+        if is_anchor and action in {'select', 'observe', 'confirm', 'reject'}:
+            if key in ledger.deferred or (at_goal and (action in {'confirm', 'reject'} or ledger.anchors.get(key, {}).get('verified'))):
+                return explore('Anchor inspection finished; search for a target supported by a direct relation')
+            return dict(decision, action='observe')
+        if action in {'select', 'observe', 'confirm'} and key:
+            pairs = [p for p in ledger.pairs(self.memory, task) if p['target_id'] == key]
+            reference = decision.get('reference_id')
+            if reference:
+                pairs = [p for p in pairs if p['anchor_id'] == reference]
+            if not pairs:
+                return explore('No direct target-anchor relation evidence; do not approach an unrelated target')
+            pair = pairs[0]
+            if not pair['anchor_verified']:
+                if selected and selected != pair['anchor_id']:
+                    return explore('Anchor category must be visually checked before committing to this pair')
+                return dict(action='observe', candidate_id=pair['anchor_id'],
+                            reason='Inspect the relation anchor category before approaching a target')
+            return dict(decision, reference_id=pair['anchor_id'])
+        return decision
+
     def notify(self, phase):
         if self.event_callback:
-            self.event_callback(dict(type='live_state', runtime_version='evidence-navigation-v3', execution_mode=self.execution_mode, phase=phase, task=self.task, arrival_geometry=getattr(self, 'proximity', None),
+            self.event_callback(dict(type='live_state', runtime_version='evidence-memory-v4', execution_mode=self.execution_mode, phase=phase, task=self.task, arrival_geometry=getattr(self, 'proximity', None),
                                      excluded_candidate_ids=sorted(excluded_ids(self.task, self.memory.instances)),
                                      observation=self.current_observation, memory=self.memory.summary(),
                                      events=self.events[-100:], observations=len(self.memory.observations)-self.observation_offset,
@@ -128,11 +185,12 @@ class VisualNavigator:
         previous_position = self.io.position.copy()
 
         def accept_observation(result, allow_decision=True):
-            nonlocal signature, missed, decision_source
+            nonlocal signature, missed, decision_source, selected
             obs, detections, elapsed = result
             self.perception_seconds = elapsed
             self.current_observation = dict(id=obs['id'], rgb_path=obs['rgb_path'])
             seen = self.memory.integrate(detections, obs)
+            selected = self.memory.resolve(selected) if selected else None
             self.record(dict(type='observation', id=obs['id'], seen=seen, position=obs['position'],
                              perception_seconds=elapsed, asynchronous=True))
             updated = semantic_signature(self.memory, self.task, selected)
@@ -212,6 +270,7 @@ class VisualNavigator:
         invalid_decisions = 0
         transit_steps = 0
         inspection_frames = 0
+        anchor_inspection_frames = 0
         exploration_until_scan = None
         obs = None
         try:
@@ -225,6 +284,7 @@ class VisualNavigator:
                     if exploration_until_scan is not None and scans >= exploration_until_scan:
                         exploration_until_scan = None
                         inspection_frames = 0
+                        anchor_inspection_frames = 0
                     if inspection_frames >= 6 and exploration_until_scan is None:
                         selected, goal = None, None
                         # Complete this area, then inspect another area before
@@ -257,14 +317,26 @@ class VisualNavigator:
                         if event['status'] != 'succeeded' or horizontal_distance(before, self.io.position) < .05:
                             self.io.mark_search_failure(exploration)
                         continue
+                selected = self.memory.resolve(selected) if selected else None
                 reference = reference_for(selected, self.task, self.memory) if selected else None
                 kwargs = {'look_at': joint_aim(self.memory.instances[selected], reference)} if selected else {'yaw': search_yaw if search_yaw is not None else initial_scan*math.pi/2}
                 obs = self.observe(**kwargs)
+                selected = self.memory.resolve(selected) if selected else None
+                if selected and self.memory.instances[selected]['category'] in (self.task or {}).get('reference_categories', []):
+                    anchor_inspection_frames += 1
+                    if anchor_inspection_frames > 2:
+                        self.memory.ledger.deferred.add(selected)
+                        selected, goal = None, None
+                        if hasattr(self.io, 'search_summary'):
+                            exploration_until_scan = self.io.search_summary().get('completed_scans', 0)+2
+                        self.record(dict(type='search_resume', reason='Anchor inspection budget exhausted; inspect a new search area'))
+                        continue
                 if selected:
                     self.inspection_positions.setdefault(selected, []).append(self.io.position.tolist())
                     inspection_frames += 1
                     self.inspection_counts[selected] = self.inspection_counts.get(selected, 0)+1
                     if self.inspection_counts[selected] >= 6:
+                        self.memory.ledger.deferred.add(selected)
                         self.deferred.add(selected)
                         if self.task is not None:
                             self.task['deferred_candidate_ids'] = sorted(self.deferred)
@@ -292,7 +364,10 @@ class VisualNavigator:
                                 self.policy.decide(instruction, obs, self.memory, selected, at_goal))
                     validate_decision(decision, self.memory.instances, obs['id'],
                                       self.memory.observations[-1]['seen'], selected, at_goal)
-                    validate_target_change(decision, self.memory, self.task, selected, at_goal)
+                    guarded = self.guard_decision(decision, selected, at_goal)
+                    released_by_guard = guarded is not decision and guarded['action'] == 'explore'
+                    decision = guarded
+                    validate_target_change(decision, self.memory, self.task, selected, at_goal and not released_by_guard)
                 except DecisionValidationError as exc:
                     invalid_decisions += 1
                     feedback = dict(observation_id=obs['id'], selected=selected, error=str(exc))
@@ -300,8 +375,18 @@ class VisualNavigator:
                     self.record(dict(type='decision_retry', proposed_decision=exc.decision,
                                      attempt=invalid_decisions, **feedback))
                     if invalid_decisions >= 3:
-                        status = 'decision_unresolved'
-                        break
+                        if not hasattr(self.io, 'explore_goal'):
+                            status = 'decision_unresolved'
+                            break
+                        if selected:
+                            self.memory.ledger.deferred.add(selected)
+                            self.memory.questions.append('Deferred '+selected+': repeated invalid decisions; evidence unresolved')
+                        selected, goal = None, None
+                        inspection_frames = 0
+                        invalid_decisions = 0
+                        if hasattr(self.io, 'search_summary'):
+                            exploration_until_scan = self.io.search_summary().get('completed_scans', 0)+1
+                        self.record(dict(type='search_resume', reason='Repeated invalid decision; move on without declaring absence'))
                     # No movement or target change is authorized by an invalid decision.
                     # Reacquire an actual observation; normal observation budget still applies.
                     continue
@@ -322,7 +407,8 @@ class VisualNavigator:
                     status, verified = 'succeeded', True
                     break
                 if action == 'reject':
-                    self.memory.reject(selected, obs['id'], decision.get('reason', 'visual mismatch'))
+                    self.memory.reject(selected, obs['id'], decision.get('reason', 'visual mismatch'),
+                                       decision.get('rejection_kind'), decision.get('reference_id'))
                     selected, goal = None, None
                     inspect_count = 0
                     if self.mode != 'active_verify':
@@ -353,6 +439,7 @@ class VisualNavigator:
                             at_goal = False
                         else:
                             self.memory.questions.append('No new estimated joint viewpoint for '+selected)
+                            self.memory.ledger.deferred.add(selected)
                             self.deferred.add(selected)
                             self.policy.deferred_candidate_ids = sorted(self.deferred)
                             if self.task is not None:
@@ -427,7 +514,7 @@ class VisualNavigator:
             if self.should_stop():
                 status, verified = 'cancelled', False
             trace = self.io.trajectory()
-            result = dict(status=status, execution_mode=self.execution_mode, runtime_version='evidence-navigation-v3', mode=self.mode, policy=type(self.policy).__name__, instruction=instruction,
+            result = dict(status=status, execution_mode=self.execution_mode, runtime_version='evidence-memory-v4', mode=self.mode, policy=type(self.policy).__name__, instruction=instruction,
                           task=self.task, detection_categories=self.categories, selected=selected, verified=verified, start_position=self.io.start,
                           final_position=self.io.position.tolist(), observations=len(self.memory.observations)-self.observation_offset,
                           elapsed_seconds=time.monotonic()-begin, path_length_m=path_length(trace),

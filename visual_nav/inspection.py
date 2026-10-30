@@ -6,8 +6,13 @@ from .geometry import horizontal_distance, path_length
 
 def reference_for(target_id, task, memory):
     target = memory.instances[target_id]
+    if target['category'] in (task or {}).get('reference_categories', []) and target['category'] not in (task or {}).get('target_categories', []):
+        return None
     candidates = [i for i in memory.instances.values()
-                  if i['category'] in (task or {}).get('reference_categories', []) and i['id'] != target_id]
+                  if i['category'] in (task or {}).get('reference_categories', []) and i['id'] != target_id
+                  and not memory.ledger.blocked(target_id, task, i['id'])
+                  and i['id'] not in memory.ledger.deferred
+                  and memory.ledger.anchor_verdict(i['id'], i['category']) is not False]
     links = {edge['target'] if edge['source'] == target_id else edge['source']
              for edge in memory.relations.summary()
              if target_id in (edge['source'], edge['target']) and edge['status'] != 'contradicted'

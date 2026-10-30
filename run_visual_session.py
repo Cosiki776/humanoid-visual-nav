@@ -86,7 +86,7 @@ def main():
                 save_json(output/'config.json', dict(command, session_id=args.session_dir.name, scene=args.scene))
                 # Rejections/questions refer to the previous instruction, not permanent object truth.
                 # Their full records remain in each run result and session history.
-                memory.rejections.clear()
+                # Typed negative evidence persists; applicability is checked per task.
                 memory.questions.clear()
                 navigator = VisualNavigator(simulator, detector, policy, output,
                     max_observations=command['max_observations'], task=task,
@@ -120,7 +120,9 @@ def main():
                         yaw=simulator.yaw if simulator else None, observation_counter=simulator.counter if simulator else 0,
                         memory=memory.summary()))
                     save_json(args.session_dir/'visual_memory.json', dict(instances=memory.instances,
-                              observations=memory.observations, relations=memory.relations.summary()))
+                              observations=memory.observations, relations=memory.relations.summary(),
+                              task_ledger=memory.ledger.summary(), scene_views=memory.views.summary(),
+                              aliases=memory.aliases, next_instance_id=memory.next_id))
                     emit(dict(type='task_done', run=output.name, status=result['status']))
     finally:
         if simulator is not None:
