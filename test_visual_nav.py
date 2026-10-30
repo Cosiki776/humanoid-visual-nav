@@ -62,6 +62,63 @@ class GeometryTests(unittest.TestCase):
 
 
 class SearchTests(unittest.TestCase):
+    def test_resume_partial_sweep_and_skip_covered_location(self):
+        search = CoverageSearch([[0,0,0], [5,0,0]], lambda a,b: True)
+        search.record_view([0,0,0], 0, 'o1')
+        self.assertAlmostEqual(search.next_view([0,0,0]), np.pi/2)
+        for i in range(1,4):
+            search.record_view([0,0,0], i*np.pi/2, str(i))
+        self.assertIsNone(search.next_view([0,0,0]))
+        np.testing.assert_allclose(search.next_goal(np.zeros(3)), [5,0,0])
+        self.assertEqual(search.next_view([5,0,0]), 0)
+
+    def test_route_cost_overrides_straight_line_distance(self):
+        search = CoverageSearch([[1,0,0], [3,0,0], [9,0,0]], lambda a,b: True,
+                                route_distance=lambda p: {1:20, 3:3, 9:None}[int(p[0])])
+        np.testing.assert_allclose(search.next_goal(np.zeros(3)), [3,0,0])
+        self.assertEqual(search.summary()['blocked_samples'], 1)
+
+    def test_transit_skips_covered_corridor_and_stalled_motion_stops(self):
+        class IO:
+            start = [0,0,0]
+            def __init__(self, stall=False):
+                self.position = np.zeros(3)
+                self.counter = 0
+                self.moves = 0
+                self.stall = stall
+                self.search = CoverageSearch([[0,0,0], [9,0,0]], lambda a,b: True)
+            def search_yaw(self): return self.search.next_view(self.position)
+            def observe(self, yaw=0):
+                self.counter += 1
+                obs = observation(str(self.counter))
+                obs['position'] = self.position.tolist()
+                self.search.record_view(self.position, yaw, obs['id'])
+                return obs
+            def explore_goal(self): return self.search.next_goal(self.position)
+            def search_summary(self): return self.search.summary()
+            def mark_search_failure(self, goal): self.search.failed(goal)
+            def advance(self, goal, budget):
+                self.moves += 1
+                if not self.stall: self.position[0] = min(goal[0], self.position[0]+budget)
+                return dict(status='succeeded', reached=bool(self.position[0] == goal[0]))
+            def trajectory(self): return [self.start, self.position.tolist()]
+        class Detector:
+            def detect(self, *args, **kwargs): return []
+        class Policy:
+            calls = 0
+            def decide(self, *args): return dict(action='explore', candidate_id=None)
+        with tempfile.TemporaryDirectory() as tmp:
+            io = IO()
+            result = VisualNavigator(io, Detector(), Policy(), tmp, max_observations=20).run('chair')
+            self.assertEqual(result['status'], 'search_complete_no_match')
+            self.assertEqual(result['observations'], 8)
+            self.assertEqual(io.moves, 3)
+            stalled = IO(stall=True)
+            result = VisualNavigator(stalled, Detector(), Policy(), tmp, max_observations=20).run('chair')
+            self.assertEqual(result['status'], 'search_exhausted_unresolved')
+            self.assertEqual(stalled.moves, 2)
+            self.assertEqual(result['observations'], 4)
+
     def test_search_goal_is_stable_and_repeated_stalls_are_bounded(self):
         search = CoverageSearch([[0,0,0],[3,0,0]], lambda a,b: False)
         first = search.next_goal(np.zeros(3))

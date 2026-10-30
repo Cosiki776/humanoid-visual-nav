@@ -54,7 +54,10 @@ class HabitatIO:
                     point = np.asarray(self._world.pf.snap_point(query, self._world.island))
                     if np.isfinite(point).all() and np.linalg.norm(point-query) < .15:
                         points.append(point)
-            self._search = CoverageSearch(points, self._world.direct)
+            def route_distance(point):
+                path = self.route(point)
+                return path_length(path) if path is not None else None
+            self._search = CoverageSearch(points, self._world.direct, route_distance=route_distance)
         return self._search
 
     def search_summary(self):
@@ -228,6 +231,9 @@ class HabitatIO:
 
     def explore_goal(self):
         return self._search_state().next_goal(self.position)
+
+    def search_yaw(self):
+        return self._search_state().next_view(self.position)
 
     def trajectory(self):
         return list(self._executor.trace)

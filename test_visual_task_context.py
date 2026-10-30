@@ -11,6 +11,59 @@ from visual_nav.loop import VisualNavigator, validate_target_change
 
 
 class ContextTests(unittest.TestCase):
+    def test_relation_confirmation_needs_current_reference_and_geometry(self):
+        memory = ObjectMemory()
+        reference = detection(.8)
+        reference['category'] = 'refrigerator'
+        memory.integrate([detection(), reference], observation())
+        task = dict(relation='near', target_categories=['chair'], reference_categories=['refrigerator'])
+        decision = dict(action='confirm', candidate_id='v0001')
+        with self.assertRaises(DecisionValidationError):
+            validate_target_change(decision, memory, task, 'v0001', True)
+        decision.update(reference_id='v0002', reference_verified=True, reference_reason='Visible refrigerator door and handle')
+        validate_target_change(decision, memory, task, 'v0001', True)
+        memory.integrate([detection()], observation('o2'))
+        with self.assertRaises(DecisionValidationError):
+            validate_target_change(decision, memory, task, 'v0001', True)
+
+    def test_ambiguous_candidate_cannot_interrupt_search_forever(self):
+        from visual_nav.search import CoverageSearch
+        class IO:
+            start = [0,0,0]
+            def __init__(self):
+                self.position = np.zeros(3)
+                self.counter = 0
+                self.search = CoverageSearch([[0,0,-1.35], [5,0,0]], lambda a,b: True)
+            def observe(self, yaw=0, look_at=None):
+                self.counter += 1
+                obs = observation('o'+str(self.counter))
+                obs['position'] = self.position.tolist()
+                if look_at is None: self.search.record_view(self.position, yaw, obs['id'])
+                return obs
+            def search_yaw(self): return self.search.next_view(self.position)
+            def search_summary(self): return self.search.summary()
+            def explore_goal(self): return self.search.next_goal(self.position)
+            def mark_search_failure(self, goal): self.search.failed(goal)
+            def docking_options(self, item): return [np.array([0,0,-1.35])]
+            def advance(self, endpoint, **kwargs):
+                self.position = np.asarray(endpoint).copy()
+                return dict(status='succeeded', reached=True)
+            def trajectory(self): return [self.start, self.position.tolist()]
+        class Detector:
+            def detect(self, *args, **kwargs): return [detection()]
+        class Policy:
+            calls = 0
+            def decide(self, instruction, obs, *args):
+                self.calls += 1
+                return dict(action='select', candidate_id='v0001', evidence_id=obs['id'])
+        with tempfile.TemporaryDirectory() as tmp:
+            io = IO()
+            result = VisualNavigator(io, Detector(), Policy(), tmp, max_observations=24).run('chair')
+            self.assertTrue(any(e['type']=='search_resume' for e in result['events']))
+            self.assertTrue(any(e.get('purpose')=='search' and e['destination']==[5.,0.,0.] for e in result['events']))
+            self.assertEqual(result['status'], 'search_complete_no_match')
+            self.assertFalse(result['verified'])
+
     def test_another_keeps_original_anchor_and_excludes_duplicate_ids(self):
         memory = ObjectMemory()
         memory.integrate([detection(0), detection(3)], observation())

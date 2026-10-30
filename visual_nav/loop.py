@@ -29,6 +29,22 @@ def validate_target_change(decision, memory, task, selected, at_goal):
     if action == 'reject' and (task or {}).get('another'):
         if decision.get('rejection_kind') not in {'category_mismatch', 'attribute_mismatch', 'relation_mismatch'}:
             raise DecisionValidationError('Reject needs rejection_kind for an observed mismatch; reaching a new target is not a reason to reject it', decision)
+    if action == 'confirm' and (task or {}).get('relation'):
+        reference = decision.get('reference_id')
+        item = memory.instances.get(reference, {})
+        current = memory.observations[-1]
+        if (reference == key or reference not in current['seen'] or
+                item.get('category') not in task.get('reference_categories', []) or
+                decision.get('reference_verified') is not True or
+                not str(decision.get('reference_reason') or '').strip()):
+            raise DecisionValidationError('Relation confirmation requires a currently visible reference_id, reference_verified=true and visual reference_reason; a cabinet is not a refrigerator', decision)
+        supported = any(edge['relation'] == task['relation'] and
+                        ((edge['source'] == key and edge['target'] == reference) or
+                         (task['relation'] == 'near' and edge['source'] == reference and edge['target'] == key)) and
+                        edge['status'] != 'contradicted' and edge['last_checked'] == current['id']
+                        for edge in memory.relations.summary())
+        if not supported:
+            raise DecisionValidationError('Relation is not supported by current joint visual geometry; inspect or reject instead', decision)
 
 
 class VisualNavigator:
@@ -51,7 +67,7 @@ class VisualNavigator:
 
     def notify(self, phase):
         if self.event_callback:
-            self.event_callback(dict(type='live_state', phase=phase, task=self.task, arrival_geometry=getattr(self, 'proximity', None),
+            self.event_callback(dict(type='live_state', runtime_version='search-progress-relations-v2', phase=phase, task=self.task, arrival_geometry=getattr(self, 'proximity', None),
                                      excluded_candidate_ids=sorted(excluded_ids(self.task, self.memory.instances)),
                                      observation=self.current_observation, memory=self.memory.summary(),
                                      events=self.events[-100:], observations=len(self.memory.observations)-self.observation_offset,
@@ -81,14 +97,58 @@ class VisualNavigator:
         status, verified = 'budget_exhausted', False
         initial_scan, inspect_count = 0, 0
         invalid_decisions = 0
+        transit_steps = 0
+        inspection_frames = 0
+        exploration_until_scan = None
         obs = None
         try:
             while len(self.memory.observations)-self.observation_offset < self.limit:
                 if self.should_stop():
                     status = 'cancelled'
                     break
-                kwargs = {'look_at': self.memory.instances[selected]['position']} if selected else {'yaw': initial_scan*math.pi/2}
+                search_yaw = None
+                if hasattr(self.io, 'search_yaw'):
+                    scans = self.io.search_summary()['completed_scans']
+                    if exploration_until_scan is not None and scans >= exploration_until_scan:
+                        exploration_until_scan = None
+                        inspection_frames = 0
+                    if inspection_frames >= 6 and exploration_until_scan is None:
+                        selected, goal = None, None
+                        # Complete this area, then inspect another area before
+                        # ambiguous candidates can interrupt exploration again.
+                        exploration_until_scan = scans+2
+                        invalid_decisions = 0
+                        self.record(dict(type='search_resume', reason='Candidate inspection budget exhausted; inspect new search viewpoints',
+                                         completed_scans=scans, resume_after_scans=exploration_until_scan))
+                    if exploration_until_scan is not None:
+                        selected, goal = None, None
+                if not selected and hasattr(self.io, 'search_yaw'):
+                    search_yaw = self.io.search_yaw()
+                    if search_yaw is None:
+                        exploration = self.io.explore_goal()
+                        if exploration is None:
+                            coverage = self.io.search_summary()
+                            status = 'search_complete_no_match' if coverage['complete'] else 'search_exhausted_unresolved'
+                            break
+                        # Covered corridors need transit, not another four model calls.
+                        # Bound transit independently of the observation budget.
+                        if transit_steps >= 40:
+                            status = 'search_exhausted_unresolved'
+                            self.memory.questions.append('Search transit budget exhausted without a new observation location')
+                            break
+                        before = self.io.position.copy()
+                        self.notify('moving')
+                        event = self.io.advance(exploration, budget=self.travel_budget)
+                        self.record(dict(type='execution', purpose='search', destination=exploration.tolist(), **event))
+                        transit_steps += 1
+                        if event['status'] != 'succeeded' or horizontal_distance(before, self.io.position) < .05:
+                            self.io.mark_search_failure(exploration)
+                        continue
+                kwargs = {'look_at': self.memory.instances[selected]['position']} if selected else {'yaw': search_yaw if search_yaw is not None else initial_scan*math.pi/2}
                 obs = self.observe(**kwargs)
+                if selected:
+                    inspection_frames += 1
+                transit_steps = 0
                 if self.should_stop():
                     status = 'cancelled'
                     break
@@ -101,7 +161,10 @@ class VisualNavigator:
                     raise RuntimeError('Internal ablation control error')
                 self.notify('thinking')
                 try:
-                    decision = self.policy.decide(instruction, obs, self.memory, selected, at_goal)
+                    decision = (dict(action='explore', candidate_id=None,
+                                     reason='Bounded candidate inspection: continuing geometric search with visual memory updates')
+                                if exploration_until_scan is not None else
+                                self.policy.decide(instruction, obs, self.memory, selected, at_goal))
                     validate_decision(decision, self.memory.instances, obs['id'],
                                       self.memory.observations[-1]['seen'], selected, at_goal)
                     validate_target_change(decision, self.memory, self.task, selected, at_goal)
@@ -190,6 +253,8 @@ class VisualNavigator:
                         selected, goal = None, None
                     continue
                 # Four normal pinhole views at each search location; no panorama conversion needed.
+                if hasattr(self.io, 'search_yaw'):
+                    continue
                 initial_scan += 1
                 if initial_scan % 4:
                     continue
@@ -212,7 +277,7 @@ class VisualNavigator:
             if self.should_stop():
                 status, verified = 'cancelled', False
             trace = self.io.trajectory()
-            result = dict(status=status, mode=self.mode, policy=type(self.policy).__name__, instruction=instruction,
+            result = dict(status=status, runtime_version='search-progress-relations-v2', mode=self.mode, policy=type(self.policy).__name__, instruction=instruction,
                           task=self.task, detection_categories=self.categories, selected=selected, verified=verified, start_position=self.io.start,
                           final_position=self.io.position.tolist(), observations=len(self.memory.observations)-self.observation_offset,
                           elapsed_seconds=time.monotonic()-begin, path_length_m=path_length(trace),
