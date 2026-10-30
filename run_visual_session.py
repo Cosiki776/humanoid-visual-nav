@@ -73,6 +73,7 @@ def main():
                 from visual_nav.policy import VLMPolicy
                 from visual_nav.loop import VisualNavigator
                 policy = VLMPolicy()
+                policy.trace_dir = output/"vlm_requests"
                 parse_begin = time.monotonic()
                 task = bind_task(policy.parse_instruction(command['instruction']), command['instruction'], previous_goal)
                 policy.task = task

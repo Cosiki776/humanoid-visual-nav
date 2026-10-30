@@ -58,6 +58,16 @@ class VLMPolicy:
         url = urlparse(self.base)
         if url.scheme not in {'http', 'https'} or not url.netloc or url.username or url.password:
             raise ValueError('Invalid VLM API base URL')
+        self.backend = os.environ.get('NAV_VLM_BACKEND', 'openai')
+        if self.backend not in {'openai', 'ollama'}:
+            raise ValueError('NAV_VLM_BACKEND must be openai or ollama')
+        if self.backend == 'ollama':
+            self.key = os.environ.get('NAV_VLM_API_KEY', '')
+        self.num_ctx = int(os.environ.get('NAV_VLM_NUM_CTX', '16384'))
+        self.max_tokens = int(os.environ.get('NAV_VLM_MAX_TOKENS', '1024'))
+        self.timeout = float(os.environ.get('NAV_VLM_TIMEOUT', str(self.timeout)))
+        self.metrics = []
+        self.trace_dir = None
         self.calls = 0
 
     def parse_instruction(self, instruction):
@@ -169,32 +179,8 @@ class VLMPolicy:
         return validate_decision(decision, allowed, observation['id'], seen, selected, at_goal)
 
     def _request(self, system, content):
-        payload = dict(model=self.model, temperature=0, stream=False,
-                       messages=[{'role': 'system', 'content': system}, {'role': 'user', 'content': content}])
-        if (urlparse(self.base).hostname or '').endswith('aliyuncs.com') and self.model.startswith('qwen'):
-            payload['enable_thinking'] = False
-            payload['response_format'] = {'type': 'json_object'}
-        headers = {'Content-Type': 'application/json'}
-        if self.key:
-            headers['Authorization'] = 'Bearer '+self.key
-        req = request.Request(self.base+'/chat/completions', data=json.dumps(payload).encode(), headers=headers)
-        self.calls += 1
-        try:
-            with request.urlopen(req, timeout=self.timeout) as response:
-                packet = json.load(response)
-        except error.HTTPError as exc:
-            raise RuntimeError('VLM HTTP %s; check model image support, region and credentials' % exc.code) from None
-        choice = packet['choices'][0]
-        if choice.get('finish_reason') != 'stop':
-            raise ValueError('Incomplete VLM answer; no action executed')
-        raw = choice['message']['content'].strip()
-        if raw.startswith('```'):
-            raw = raw.split('\n', 1)[1].rsplit('```', 1)[0]
-        try:
-            decision = json.loads(raw)
-        except json.JSONDecodeError:
-            raise ValueError('VLM returned non-JSON final content (%d characters); no action executed' % len(raw)) from None
-        return decision
+        from .transport import request_json
+        return request_json(self, system, content)
 
 
 class ColorPolicy:

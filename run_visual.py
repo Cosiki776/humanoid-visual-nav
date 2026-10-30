@@ -15,6 +15,7 @@ import bootstrap
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--observer-stream', action='store_true', help='Third-person movement frames for the Web only')
+    p.add_argument('--realtime', action='store_true', help='Use real-time walking pace without emitting video frames')
     p.add_argument('--live-events', action='store_true', help='Emit visual-only Web state updates')
     p.add_argument('--scene', default='apt_0')
     p.add_argument('--seed', type=int, default=7)
@@ -51,7 +52,7 @@ def main():
         print(json.dumps(dict(type='observer_frame', jpeg=base64.b64encode(jpeg).decode('ascii'))), flush=True)
     io = HabitatIO(args.scene, output, seed=args.seed, start=args.start,
                    frame_callback=observer_frame if args.observer_stream else None,
-                   realtime=args.observer_stream)
+                   realtime=args.observer_stream or args.realtime)
     try:
         if args.mode == 'coverage':
             # Real cameras and navigation, no perception/VLM; only verifies search termination.
@@ -89,6 +90,8 @@ def main():
             from visual_nav.policy import VLMPolicy, ColorPolicy
             detector = GroundedSAM(args.sam_checkpoint, args.dino_model, args.device)
             policy = VLMPolicy() if args.policy == 'vlm' and args.mode != 'perception' else ColorPolicy()
+            if isinstance(policy, VLMPolicy):
+                policy.trace_dir = output/"vlm_requests"
             from visual_nav.task import validate_task
             parse_begin = time.monotonic()
             if isinstance(policy, VLMPolicy):

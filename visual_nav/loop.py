@@ -79,15 +79,21 @@ class VisualNavigator:
         self.notify(event['type'])
 
     def observe(self, **kwargs):
+        started = time.perf_counter()
         obs = self.io.observe(**kwargs)
+        captured = time.perf_counter()
         self.current_observation = dict(id=obs['id'], rgb_path=obs['rgb_path'])
         self.notify('perception')
         detections = self.detector.detect(obs, self.output, categories=self.categories)
+        detected = time.perf_counter()
         seen = self.memory.integrate(detections, obs)
+        integrated = time.perf_counter()
         if self.events and self.events[-1]['type'] == 'execution':
             self.events[-1]['keyframes'] = [obs['id']]
             self.events[-1]['discoveries'] = seen
-        self.record(dict(type='observation', id=obs['id'], seen=seen, position=obs['position']))
+        self.record(dict(type='observation', id=obs['id'], seen=seen, position=obs['position'],
+                         capture_seconds=captured-started, perception_seconds=detected-captured,
+                         memory_seconds=integrated-detected))
         print(json.dumps(self.events[-1]), flush=True)
         return obs
 
@@ -281,7 +287,7 @@ class VisualNavigator:
                           task=self.task, detection_categories=self.categories, selected=selected, verified=verified, start_position=self.io.start,
                           final_position=self.io.position.tolist(), observations=len(self.memory.observations)-self.observation_offset,
                           elapsed_seconds=time.monotonic()-begin, path_length_m=path_length(trace),
-                          vlm_calls=self.policy.calls, travel_budget_m=self.travel_budget,
+                          vlm_calls=self.policy.calls, vlm_timings=getattr(self.policy, 'metrics', []), travel_budget_m=self.travel_budget,
                           events=self.events, memory=self.memory.summary())
             result['search_coverage'] = getattr(self.io, 'search_summary', lambda: None)()
             result['excluded_candidate_ids'] = sorted(excluded_ids(self.task, self.memory.instances))

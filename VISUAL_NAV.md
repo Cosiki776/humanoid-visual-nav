@@ -311,3 +311,60 @@ VLM最多收到候选集合内部24条关系，明确标注历史/当前、假�
 结构化决策违反证据或目标切换约束时记录decision_retry，把原因反馈给VLM，保持原目标并获取新观察，非法动作不执行。连续3次失败以decision_unresolved（目标尚未核实）结束，仍受总观察预算约束；网络、模型初始化等真正运行异常保留error。终点的当前实例可见性、证据ID、停靠距离校验不放宽。
 
 网页可显示重新观察和未核实状态。新的Python代码在下一次新建会话后生效，不重启或重置正在使用的旧会话。
+
+## 本地 Ollama 与云端耗时对比
+
+GPU 2 留给独立运行的 Ollama 服务；仿真和 DINO/SAM 使用另一张显卡。`ollama run` 是交互客户端，不需要一直打开，导航程序通过 HTTP 调用已经运行的 `ollama serve`。不要重复启动同端口的 Ollama 服务。
+
+前台启动导航网页（Ctrl+C 停止）；本地和云端二选一，切换前先停止原网页服务：
+
+```bash
+cd /home/caosiqi/project/habitat_work/humanoid_nav_demo
+CUDA_VISIBLE_DEVICES=0 bash start_visual.sh local
+# 或：CUDA_VISIBLE_DEVICES=0 bash start_visual.sh cloud
+```
+
+启动脚本默认给导航进程暴露物理 GPU 0（内部称 cuda:0），不会改变已经运行在物理 GPU 2 上的 Ollama。云端仍读取原 `model_config.json`，不覆盖密钥。网页仍为 8770 端口；切换服务后为新会话，不自动恢复历史机器人位置。
+
+本地使用 `NAV_VLM_BACKEND=ollama`、`NAV_VLM_BASE_URL=http://127.0.0.1:11434`、`NAV_VLM_MODEL=qwen3.8:27b-q4_K_M`。原生 `/api/chat` 接口将图片转换为按顺序标识的 base64 列表，显式设置 `think=false`、`format=json`、`num_ctx=16384`；云端仍使用兼容接口并关闭 thinking。两端默认输出上限 1024 token，可通过 `NAV_VLM_MAX_TOKENS` 调整。两种协议的图片组织方式不同，图片字节、系统规则及任务内容相同。
+
+每个新任务输出目录新增 `vlm_requests/`：
+
+- `request_XXXX.json`：完整语义请求（包含图片），不含 HTTP 授权头或密钥，可用于相同输入复测。
+- `response_XXXX.json`：服务端实际响应。
+- `timings.jsonl`：每次请求往返耗时、图片数、完成状态；本地另有加载、输入处理、生成耗时及 token/缓存统计。失败也记录，不把失败请求当作成功计时。
+- `result.json` 的 `vlm_timings` 保留请求计时；观察事件记录采图、感知和记忆更新时间。感知时间包含发布 perception 状态的开销。
+
+`elapsed_seconds` 是导航循环耗时，不含前面的模型/仿真初始化和指令解析；初始化与解析另有 `models.json` 等记录。因此它不是浏览器点击到最终显示的严格端到端耗时。简单指令会由规则解析，无需调用模型；不要把规则解析耗时当成 LLM 推理耗时。
+
+相同输入复测（不启动仿真、不运行感知）：
+
+```bash
+NO_PROXY=dashscope.aliyuncs.com,127.0.0.1,localhost \
+no_proxy=dashscope.aliyuncs.com,127.0.0.1,localhost \
+/home/caosiqi/miniconda3/envs/habitat/bin/python compare_vlm.py \
+  --request outputs/某次任务/vlm_requests/request_0001.json \
+  --output outputs/某个新对比目录 --repeats 3
+```
+
+也支持 `--result outputs/某次旧任务/result.json`，从旧任务最终视觉记忆和最后观测构造离线测试输入（selected=null，at_goal=false），不是还原当时的完整在线决策。适合比较请求耗时，不用于声称导航成功率。输出目录必须尚不存在，避免覆盖实验。
+
+`summary.json`、`results.json` 包含耗时和实际动作。第一次请求不保证是冷启动；重复请求可能命中大量前缀/图片缓存，必须分开报告，不能用重复请求速度代表不断更新画面的导航速度。`decision_valid` 仅检查动作格式、实例 ID 和基本证据一致性，不代表语义正确、关系确认门控通过或 GT 成功。真正比较导航总耗时，应分别运行相同场景、起点、指令和预算，另行比较成功率与行走长度，避免将更早失败当成更快成功。
+
+完整导航对比（两端各一次，串行，仿真/感知 GPU 0；后台可用 nohup）：
+
+```bash
+nohup /home/caosiqi/miniconda3/envs/habitat/bin/python compare_navigation.py \
+  --instruction '走到白色椅子旁边' --sim-gpu 0 \
+  --output outputs/navigation_compare_manual > /tmp/navigation_compare_manual.log 2>&1 &
+```
+
+`compare_navigation.py` 用同一场景/种子，且将云端实际起点传给本地运行；默认 24 次观察、实时行走、不输出网页视频。`summary.json` 区分 `process_wall_seconds`（启动到退出）、`elapsed_seconds`（导航循环）、`llm_wall_seconds`（包含解析请求的全部模型请求）、`llm_decision_seconds`、`llm_instruction_seconds`、感知与记忆耗时。`setup_seconds` 包含初始化和指令解析，不应再次叠加解析耗时；`non_llm_process_seconds` 为总时间减去模型请求时间，包含初始化、感知、行走、规划、存盘和退出，不是纯运动时间。每次独立初始化；模型加载和缓存情况保留在逐请求记录中。报告必须一起比较终止状态、路径长度与观察次数，一次运行不能代表稳定性能或独立 GT 成功率。
+
+### 启动预热与本地模型驻留
+
+`bash start_visual.sh local` 现在先运行 `warmup_vlm.py`，向已有 Ollama 服务发送空 `/api/chat` 预加载请求（同一模型、16K 上下文、`keep_alive=-1`），成功后才启动 8770 导航网页。失败时启动脚本退出，不会假装已就绪。云端启动不执行此步骤。预加载不启动 Ollama、不更改 GPU 分配，不减少截图，也不产生物体记忆或额外导航决策。
+
+后续本地决策请求同样使用 `keep_alive=-1`，避免把驻留时间重新设回十分钟。停止网页后模型仍占用 GPU 2；需要主动释放时执行 `~/apps/ollama/bin/ollama stop qwen3.8:27b-q4_K_M`。重启 Ollama、手动卸载或其他模型调度仍可能导致下次重新加载。该预热提前完成权重加载，不承诺省掉新图片编码/输入处理时间，也不是全部视觉计算内核的预热。
+
+可单独执行 `/home/caosiqi/miniconda3/envs/habitat/bin/python warmup_vlm.py`，再用 `~/apps/ollama/bin/ollama ps` 查看驻留情况。此次验证时模型已经在显存中，预加载约 0.004 秒，确认上下文 16384、全部 GPU 加载且过期时间更新为长期驻留；这不是冷加载耗时测量。
