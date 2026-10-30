@@ -17,8 +17,6 @@ def validate_target_change(decision, memory, task, selected, at_goal):
     action, key = decision['action'], decision.get('candidate_id')
     if action in {'select', 'observe', 'confirm'} and memory.ledger.blocked(key, task, decision.get('reference_id')):
         raise DecisionValidationError('Persistent negative evidence or exhausted inspection forbids this candidate/pair', decision)
-    if action in {'select', 'observe', 'confirm'} and key in (task or {}).get('deferred_candidate_ids', []):
-        raise DecisionValidationError('Candidate inspection budget exhausted for this task; search elsewhere', decision)
     if action in {'select', 'observe', 'confirm'} and key in excluded_ids(task, memory.instances):
         raise DecisionValidationError('This is the fixed previous goal, not another object', decision)
     if selected and at_goal and action in {'explore', 'uncertain'}:
@@ -75,7 +73,6 @@ class VisualNavigator:
         self.task = task
         self.memory.ledger.begin(task)
         self.inspection_counts = {}
-        self.deferred = set()
         self.inspection_positions = {}
         if task and task.get('another') and not task.get('excluded_goal'):
             raise ValueError('“另一个”需要会话中已确认目标作为固定参照')
@@ -136,7 +133,7 @@ class VisualNavigator:
 
     def notify(self, phase):
         if self.event_callback:
-            self.event_callback(dict(type='live_state', runtime_version='evidence-memory-v4', execution_mode=self.execution_mode, phase=phase, task=self.task, arrival_geometry=getattr(self, 'proximity', None),
+            self.event_callback(dict(type='live_state', runtime_version='observation-memory-v5', execution_mode=self.execution_mode, phase=phase, task=self.task, arrival_geometry=getattr(self, 'proximity', None),
                                      excluded_candidate_ids=sorted(excluded_ids(self.task, self.memory.instances)),
                                      observation=self.current_observation, memory=self.memory.summary(),
                                      events=self.events[-100:], observations=len(self.memory.observations)-self.observation_offset,
@@ -150,6 +147,8 @@ class VisualNavigator:
     def observe(self, **kwargs):
         started = time.perf_counter()
         obs = self.io.observe(**kwargs)
+        obs['capture_kind'] = 'scan' if 'yaw' in kwargs and kwargs.get('look_at') is None else 'keyframe'
+        obs['search_progress'] = getattr(self.io, 'search_summary', lambda: {})()
         captured = time.perf_counter()
         self.current_observation = dict(id=obs['id'], rgb_path=obs['rgb_path'])
         self.notify('perception')
@@ -238,6 +237,8 @@ class VisualNavigator:
                     import numpy as np
                     aim = self.io.position+np.array([math.sin(self.io.yaw), 1.4, -math.cos(self.io.yaw)])
                 obs = self.io.observe(look_at=aim)
+                obs['capture_kind'] = 'keyframe'
+                obs['search_progress'] = getattr(self.io, 'search_summary', lambda: {})()
                 runtime.submit_observation(obs)
                 last_capture, last_time = self.io.position.copy(), time.monotonic()
             return False
@@ -337,10 +338,6 @@ class VisualNavigator:
                     self.inspection_counts[selected] = self.inspection_counts.get(selected, 0)+1
                     if self.inspection_counts[selected] >= 6:
                         self.memory.ledger.deferred.add(selected)
-                        self.deferred.add(selected)
-                        if self.task is not None:
-                            self.task['deferred_candidate_ids'] = sorted(self.deferred)
-                        self.policy.deferred_candidate_ids = sorted(self.deferred)
                         self.memory.questions.append('Inspection budget exhausted for '+selected+'; not evidence of absence')
                         self.record(dict(type='candidate_deferred', candidate_id=selected))
                         selected, goal = None, None
@@ -440,10 +437,6 @@ class VisualNavigator:
                         else:
                             self.memory.questions.append('No new estimated joint viewpoint for '+selected)
                             self.memory.ledger.deferred.add(selected)
-                            self.deferred.add(selected)
-                            self.policy.deferred_candidate_ids = sorted(self.deferred)
-                            if self.task is not None:
-                                self.task['deferred_candidate_ids'] = sorted(self.deferred)
                             selected, goal = None, None
                             continue
                     if not options:
@@ -514,7 +507,7 @@ class VisualNavigator:
             if self.should_stop():
                 status, verified = 'cancelled', False
             trace = self.io.trajectory()
-            result = dict(status=status, execution_mode=self.execution_mode, runtime_version='evidence-memory-v4', mode=self.mode, policy=type(self.policy).__name__, instruction=instruction,
+            result = dict(status=status, execution_mode=self.execution_mode, runtime_version='observation-memory-v5', mode=self.mode, policy=type(self.policy).__name__, instruction=instruction,
                           task=self.task, detection_categories=self.categories, selected=selected, verified=verified, start_position=self.io.start,
                           final_position=self.io.position.tolist(), observations=len(self.memory.observations)-self.observation_offset,
                           elapsed_seconds=time.monotonic()-begin, path_length_m=path_length(trace),

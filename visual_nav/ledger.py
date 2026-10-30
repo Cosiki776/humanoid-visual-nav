@@ -14,10 +14,12 @@ class TaskLedger:
         self.claims = []
         self.deferred = set()
         self.anchors = {}
+        self.questions = []
 
     def begin(self, task):
         self.task_id += 1
         self.task = copy.deepcopy(task or {})
+        self.questions.clear()
         self.deferred = set()
 
     def record(self, target, observation_id, reason, kind, anchor=None):
@@ -109,4 +111,4 @@ class TaskLedger:
 
     def summary(self):
         return dict(task_id=self.task_id, task=copy.deepcopy(self.task), claims=copy.deepcopy(self.claims),
-                    deferred_ids=sorted(self.deferred), anchors=copy.deepcopy(self.anchors))
+                    deferred_ids=sorted(self.deferred), anchors=copy.deepcopy(self.anchors), unresolved=list(self.questions))

@@ -61,9 +61,10 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(views.retrieve(['a','b'], exclude=['o2'])[0]['id'], 'o3')
 
     def test_deferred_candidate_cannot_restart_inspection(self):
+        memory = ObjectMemory()
+        memory.ledger.deferred.add('v1')
         with self.assertRaises(DecisionValidationError):
-            validate_target_change(dict(action='select', candidate_id='v1'), ObjectMemory(),
-                                   {'deferred_candidate_ids':['v1']}, None, False)
+            validate_target_change(dict(action='select', candidate_id='v1'), memory, {}, None, False)
 
     def test_adaptive_inputs_and_explicit_expansion_keep_legacy_switch(self):
         with tempfile.TemporaryDirectory() as tmp:

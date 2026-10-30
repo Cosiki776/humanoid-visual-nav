@@ -12,14 +12,21 @@ class ObjectMemory:
         self.instances = {}
         self.merge_distance = merge_distance
         self.observations = []
-        self.rejections = []
-        self.questions = []
         self.relations = RelationMemory()
         self.views = ViewMemory()
         self.ledger = TaskLedger()
         self.version = 0
         self.aliases = {}
         self.next_id = 1
+
+    @property
+    def rejections(self):
+        # Compatibility view for existing UI/result consumers, never a second store.
+        return [dict(id=c['target_id'], **copy.deepcopy(c)) for c in self.ledger.claims]
+
+    @property
+    def questions(self):
+        return self.ledger.questions
 
     def integrate(self, detections, observation):
         seen, fresh = [], {}
@@ -136,8 +143,6 @@ class ObjectMemory:
             observation['seen'] = list(dict.fromkeys(self.resolve(k) for k in observation['seen']))
         for view in self.views.views:
             view['seen'] = list(dict.fromkeys(self.resolve(k) for k in view['seen']))
-        for rejection in self.rejections:
-            rejection['id'] = self.resolve(rejection['id'])
         self.ledger.remap(alias, canonical)
         edges = {}
         for edge in self.relations.summary():
@@ -154,11 +159,11 @@ class ObjectMemory:
     def reject(self, key, observation_id, reason, kind=None, anchor=None):
         if key not in self.instances or self.instances[key]['last_seen'] != observation_id:
             raise ValueError('Rejection requires a current visual observation of this instance')
-        claim = self.ledger.record(key, observation_id, reason, kind, anchor)
-        self.rejections.append(dict(id=key, observation_id=observation_id, reason=reason, **{k: claim[k] for k in ('kind', 'task_id', 'status')}))
+        self.ledger.record(key, observation_id, reason, kind, anchor)
 
     def summary(self):
         return {'aliases': dict(self.aliases), 'version': self.version, 'task_ledger': self.ledger.summary(), 'instances': [{k: copy.deepcopy(v) for k, v in item.items() if k != 'points'}
                               for item in self.instances.values()],
                 'rejections': copy.deepcopy(self.rejections), 'unresolved': list(self.questions),
-                'relations': self.relations.summary(), 'scene_views': self.views.summary()}
+                'relations': self.relations.summary(), 'scene_views': self.views.summary(),
+                'observation_groups': self.views.observation_groups()}
