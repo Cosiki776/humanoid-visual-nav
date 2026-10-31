@@ -15,11 +15,13 @@ class TaskLedger:
         self.deferred = set()
         self.anchors = {}
         self.questions = []
+        self.active_anchor_id = None
 
     def begin(self, task):
         self.task_id += 1
         self.task = copy.deepcopy(task or {})
         self.questions.clear()
+        self.active_anchor_id = None
         self.deferred = set()
 
     def record(self, target, observation_id, reason, kind, anchor=None):
@@ -84,13 +86,32 @@ class TaskLedger:
         seen = set(memory.observations[-1]['seen']) if memory.observations else set()
         return sorted(result, key=lambda p: (p['target_id'] not in seen or p['anchor_id'] not in seen, not p['anchor_verified'], -p['confidence']))
 
+    def active_anchor(self, memory, task=None):
+        task = self.task if task is None else task
+        key = memory.resolve(self.active_anchor_id) if self.active_anchor_id else None
+        item = memory.instances.get(key, {})
+        if (item.get('category') in task.get('reference_categories', []) and
+                key not in self.deferred and self.anchor_verdict(key, item['category']) is True):
+            return key
+        return None
+
+    def stage_task(self, memory, task):
+        if not task.get('relation') or self.active_anchor(memory, task):
+            return copy.deepcopy(task)
+        return dict(target_categories=list(task.get('reference_categories', [])), attributes=[],
+                    reference_categories=[], relation='', another=False,
+                    detection_categories=list(task.get('detection_categories', [])))
+
     def context(self, memory, task=None):
         task = self.task if task is None else task
         pairs = self.pairs(memory, task)
         anchors = [i['id'] for i in memory.instances.values()
                    if i['category'] in task.get('reference_categories', []) and i['id'] not in self.deferred and self.anchor_verdict(i['id'], i['category']) is not False]
-        phase = ('VERIFY_CANDIDATE' if pairs else 'SEARCH_TARGET_NEAR_ANCHOR' if anchors else 'SEARCH_ANCHOR') if task.get('relation') else 'SEARCH_TARGET'
-        return dict(task_id=self.task_id, phase=phase, candidate_pairs=pairs[:3], anchor_ids=anchors[:3],
+        active = self.active_anchor(memory, task)
+        if active:
+            pairs = [pair for pair in pairs if pair['anchor_id'] == active]
+        phase = ('SEARCH_TARGET_NEAR_ANCHOR' if active else 'SEARCH_ANCHOR') if task.get('relation') else 'SEARCH_TARGET'
+        return dict(task_id=self.task_id, phase=phase, active_anchor_id=active, candidate_pairs=pairs[:3], anchor_ids=anchors[:3],
                     negative_evidence=[copy.deepcopy(c) for c in self.claims
                                        if self.blocked(c['target_id'], task, c['anchor_id']) and
                                        (c['status'] == 'rejected' or c['task_id'] == self.task_id)][-8:],
@@ -99,6 +120,8 @@ class TaskLedger:
                     deferred_ids=sorted(self.deferred))
 
     def remap(self, alias, canonical):
+        if self.active_anchor_id == alias:
+            self.active_anchor_id = canonical
         for claim in self.claims:
             for field in ('target_id', 'anchor_id'):
                 if claim[field] == alias:
@@ -110,5 +133,5 @@ class TaskLedger:
             self.anchors.setdefault(canonical, self.anchors.pop(alias))
 
     def summary(self):
-        return dict(task_id=self.task_id, task=copy.deepcopy(self.task), claims=copy.deepcopy(self.claims),
+        return dict(task_id=self.task_id, active_anchor_id=self.active_anchor_id, task=copy.deepcopy(self.task), claims=copy.deepcopy(self.claims),
                     deferred_ids=sorted(self.deferred), anchors=copy.deepcopy(self.anchors), unresolved=list(self.questions))

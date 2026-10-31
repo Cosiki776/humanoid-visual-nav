@@ -221,6 +221,33 @@ class HabitatIO:
             return not distances or min(distances) >= distance-extent-.15
         return rank_viewpoints(points, self.position, instance, reference, self.route, visible, visited)
 
+    def reveal_options(self, anchor, visited=()):
+        """Geometry-only lateral viewpoints; does not require seeing the target."""
+        from .inspection import rank_reveal_viewpoints
+        import habitat_sim
+        import magnum as mn
+        lo, hi = np.asarray(anchor['bbox_min']), np.asarray(anchor['bbox_max'])
+        center = (lo+hi)/2
+        points, used = [], set()
+        for clearance in (.7, 1.2, 1.8):
+            for angle in np.linspace(0, 2*math.pi, 16, endpoint=False):
+                query = np.array([center[0]+((hi[0]-lo[0])/2+clearance)*math.cos(angle),
+                                  self.position[1],
+                                  center[2]+((hi[2]-lo[2])/2+clearance)*math.sin(angle)])
+                point = np.asarray(self._world.pf.snap_point(query, self._world.island))
+                key = tuple(np.round(point, 2))
+                if np.isfinite(point).all() and np.linalg.norm(point-query) < .15 and key not in used:
+                    used.add(key)
+                    points.append(point)
+        def visible(eye, probe):
+            delta = probe-eye
+            distance = np.linalg.norm(delta)
+            if distance < .05:
+                return True
+            hits = self._world.sim.cast_ray(habitat_sim.geo.Ray(mn.Vector3(eye), mn.Vector3(delta/distance))).hits
+            return not any(.05 < h.ray_distance < distance-.1 and h.object_id != self._world.human_id for h in hits)
+        return rank_reveal_viewpoints(points, self.position, anchor, self.route, visible, visited)
+
     def advance(self, endpoint, budget=1.0, on_step=None):
         """Travel <= budget metres along NavMesh path, checking every controller step."""
         route = self._roadmap.path(self.position, endpoint) if self._roadmap else self.route(endpoint)

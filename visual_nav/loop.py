@@ -74,6 +74,9 @@ class VisualNavigator:
         self.memory.ledger.begin(task)
         self.inspection_counts = {}
         self.inspection_positions = {}
+        self.local_anchor = None
+        self.local_search_goal = None
+        self.local_search_visited = []
         if task and task.get('another') and not task.get('excluded_goal'):
             raise ValueError('“另一个”需要会话中已确认目标作为固定参照')
         self.categories = tuple(task["detection_categories"]) if task else COMMON_CATEGORIES
@@ -93,7 +96,7 @@ class VisualNavigator:
                 return dict(decision, rejection_kind='insufficient_evidence')
         if not task.get('relation'):
             return decision
-        # An anchor may be approached to inspect it, but is never the task goal.
+        # Reuse ordinary select/approach/confirm for the anchor subtask.
         is_anchor = key in self.memory.instances and self.memory.instances[key]['category'] in task.get('reference_categories', [])
         current = self.memory.observations[-1]
         assessment = decision.get('anchor_assessment')
@@ -108,15 +111,36 @@ class VisualNavigator:
                 elif assessment.get('matches') is False:
                     ledger.anchors[anchor] = dict(verified=False, category=category, evidence_id=current['id'], reason=assessment['reason'])
                     ledger.deferred.add(anchor)
+        active = ledger.active_anchor(self.memory, task)
+        if not active:
+            if action in {'select', 'observe', 'confirm', 'reject'} and key:
+                if not is_anchor:
+                    return explore('First complete the independent anchor task; target objects are only recorded')
+                if ledger.anchor_verdict(key, self.memory.instances[key]['category']) is False:
+                    return explore('This object was already rejected as the required anchor')
+                if action in {'confirm', 'reject'}:
+                    current = self.memory.observations[-1]
+                    if key != selected or key not in current['seen'] or decision.get('evidence_id') != current['id'] or not at_goal:
+                        raise DecisionValidationError('Anchor completion requires current close observation', decision)
+                    category = self.memory.instances[key]['category']
+                    if action == 'confirm':
+                        ledger.anchors[key] = dict(verified=True, category=category, evidence_id=current['id'], reason=decision.get('reason', 'current visual confirmation'))
+                        ledger.active_anchor_id = key
+                        self.record(dict(type='anchor_confirmed', candidate_id=key, observation_id=current['id'], next_phase='SEARCH_TARGET_NEAR_ANCHOR'))
+                    else:
+                        ledger.anchors[key] = dict(verified=False, category=category, evidence_id=current['id'], reason=decision.get('reason', 'current visual mismatch'))
+                        ledger.deferred.add(key)
+                        self.record(dict(type='anchor_rejected', candidate_id=key, observation_id=current['id']))
+                    return explore('Anchor subtask finished; continue the remaining task')
+                return decision
+            return decision
         if (selected and action == 'explore' and selected in ledger.anchors and
                 self.memory.instances[selected]['category'] in task.get('reference_categories', [])):
             return explore('Anchor assessment recorded; continue target search')
-        if is_anchor and action in {'select', 'observe', 'confirm', 'reject'}:
-            if key in ledger.deferred or (at_goal and (action in {'confirm', 'reject'} or ledger.anchors.get(key, {}).get('verified'))):
-                return explore('Anchor inspection finished; search for a target supported by a direct relation')
-            return dict(decision, action='observe')
+        if is_anchor and key == active and action in {'select', 'observe', 'confirm', 'reject'}:
+            return explore('Anchor already confirmed; move to reveal its surroundings instead of inspecting its face again')
         if action in {'select', 'observe', 'confirm'} and key:
-            pairs = [p for p in ledger.pairs(self.memory, task) if p['target_id'] == key]
+            pairs = [p for p in ledger.pairs(self.memory, task) if p['target_id'] == key and p['anchor_id'] == active]
             reference = decision.get('reference_id')
             if reference:
                 pairs = [p for p in pairs if p['anchor_id'] == reference]
@@ -131,9 +155,38 @@ class VisualNavigator:
             return dict(decision, reference_id=pair['anchor_id'])
         return decision
 
+    def next_search_goal(self):
+        anchor = self.memory.ledger.active_anchor(self.memory, self.task or {})
+        if not anchor or not (hasattr(self.io, 'reveal_options') or hasattr(self.io, 'inspection_options')):
+            return self.io.explore_goal()
+        if self.local_anchor:
+            self.local_anchor = self.memory.resolve(self.local_anchor)
+        if anchor != self.local_anchor:
+            self.local_anchor, self.local_search_goal = anchor, None
+            self.local_search_visited = [self.io.position.tolist()]
+        if self.local_search_goal is not None:
+            if horizontal_distance(self.io.position, self.local_search_goal) > .25:
+                return self.local_search_goal
+            self.local_search_visited.append(self.local_search_goal.tolist())
+            self.local_search_goal = None
+        if len(self.local_search_visited) >= 4:
+            return None
+        if hasattr(self.io, 'reveal_options'):
+            options = self.io.reveal_options(self.memory.instances[anchor], self.local_search_visited)
+        else:
+            options = self.io.inspection_options(self.memory.instances[anchor], None,
+                self.memory.views.retrieve([anchor], limit=8), self.local_search_visited)
+        if not options:
+            return None
+        self.local_search_goal = options[0]
+        self.record(dict(type='anchor_local_search', anchor_id=anchor,
+                         destination=options[0].tolist(), completed_viewpoints=len(self.local_search_visited)-1,
+                         purpose='Reveal unseen space around confirmed anchor; target detection not required'))
+        return self.local_search_goal
+
     def notify(self, phase):
         if self.event_callback:
-            self.event_callback(dict(type='live_state', runtime_version='observation-memory-v5', execution_mode=self.execution_mode, phase=phase, task=self.task, arrival_geometry=getattr(self, 'proximity', None),
+            self.event_callback(dict(type='live_state', runtime_version='anchor-reveal-v7', execution_mode=self.execution_mode, phase=phase, task=self.task, arrival_geometry=getattr(self, 'proximity', None),
                                      excluded_candidate_ids=sorted(excluded_ids(self.task, self.memory.instances)),
                                      observation=self.current_observation, memory=self.memory.summary(),
                                      events=self.events[-100:], observations=len(self.memory.observations)-self.observation_offset,
@@ -271,7 +324,6 @@ class VisualNavigator:
         invalid_decisions = 0
         transit_steps = 0
         inspection_frames = 0
-        anchor_inspection_frames = 0
         exploration_until_scan = None
         obs = None
         try:
@@ -285,7 +337,6 @@ class VisualNavigator:
                     if exploration_until_scan is not None and scans >= exploration_until_scan:
                         exploration_until_scan = None
                         inspection_frames = 0
-                        anchor_inspection_frames = 0
                     if inspection_frames >= 6 and exploration_until_scan is None:
                         selected, goal = None, None
                         # Complete this area, then inspect another area before
@@ -296,11 +347,28 @@ class VisualNavigator:
                                          completed_scans=scans, resume_after_scans=exploration_until_scan))
                     if exploration_until_scan is not None:
                         selected, goal = None, None
+                        if self.memory.ledger.active_anchor(self.memory, self.task or {}):
+                            # Local reveal uses different viewpoints, not four-direction
+                            # global scans. Do not wait forever for completed_scans here.
+                            exploration_until_scan = None
+                            inspection_frames = 0
                 if not selected and hasattr(self.io, 'search_yaw'):
                     search_yaw = self.io.search_yaw()
+                    active_anchor = self.memory.ledger.active_anchor(self.memory, self.task or {})
+                    if active_anchor:
+                        view = self.memory.views.views[-1] if self.memory.views.views else {}
+                        scanned_here = (view.get('capture_kind') == 'scan' and
+                            horizontal_distance(view['position'], self.io.position) < .25)
+                        pending_move = self.local_search_goal is not None and horizontal_distance(self.io.position, self.local_search_goal) > .25
+                        if scanned_here or pending_move:
+                            search_yaw = None
                     if search_yaw is None:
-                        exploration = self.io.explore_goal()
+                        exploration = self.next_search_goal()
                         if exploration is None:
+                            if self.memory.ledger.active_anchor(self.memory, self.task or {}):
+                                status = 'anchor_search_unresolved'
+                                self.memory.questions.append('Confirmed anchor surroundings exhausted available inspection viewpoints; target remains unresolved')
+                                break
                             coverage = self.io.search_summary()
                             status = 'search_complete_no_match' if coverage['complete'] else 'search_exhausted_unresolved'
                             break
@@ -317,21 +385,19 @@ class VisualNavigator:
                         transit_steps += 1
                         if event['status'] != 'succeeded' or horizontal_distance(before, self.io.position) < .05:
                             self.io.mark_search_failure(exploration)
+                            if self.local_search_goal is not None:
+                                self.local_search_visited.append(self.local_search_goal.tolist())
+                                self.local_search_goal = None
                         continue
                 selected = self.memory.resolve(selected) if selected else None
                 reference = reference_for(selected, self.task, self.memory) if selected else None
                 kwargs = {'look_at': joint_aim(self.memory.instances[selected], reference)} if selected else {'yaw': search_yaw if search_yaw is not None else initial_scan*math.pi/2}
+                active_anchor = self.memory.ledger.active_anchor(self.memory, self.task or {})
+                if not selected and active_anchor:
+                    center = self.memory.instances[active_anchor]['position']
+                    kwargs = {'yaw': math.atan2(center[0]-self.io.position[0], -(center[2]-self.io.position[2]))}
                 obs = self.observe(**kwargs)
                 selected = self.memory.resolve(selected) if selected else None
-                if selected and self.memory.instances[selected]['category'] in (self.task or {}).get('reference_categories', []):
-                    anchor_inspection_frames += 1
-                    if anchor_inspection_frames > 2:
-                        self.memory.ledger.deferred.add(selected)
-                        selected, goal = None, None
-                        if hasattr(self.io, 'search_summary'):
-                            exploration_until_scan = self.io.search_summary().get('completed_scans', 0)+2
-                        self.record(dict(type='search_resume', reason='Anchor inspection budget exhausted; inspect a new search area'))
-                        continue
                 if selected:
                     self.inspection_positions.setdefault(selected, []).append(self.io.position.tolist())
                     inspection_frames += 1
@@ -350,8 +416,9 @@ class VisualNavigator:
                 self.proximity = proximity
                 at_goal = bool(selected and goal is not None and horizontal_distance(self.io.position, goal) < .18
                                and proximity['close_enough'])
+                anchor_subtask = bool((self.task or {}).get('relation') and not self.memory.ledger.active_anchor(self.memory, self.task))
                 # Initial-view ablation freezes perception after choosing and never asks for confirmation.
-                if self.mode == 'candidates' and selected:
+                if self.mode == 'candidates' and selected and not anchor_subtask:
                     raise RuntimeError('Internal ablation control error')
                 self.notify('thinking')
                 try:
@@ -391,10 +458,13 @@ class VisualNavigator:
                     status = 'cancelled'
                     break
                 invalid_decisions = 0
+                if anchor_subtask and self.memory.ledger.active_anchor(self.memory, self.task):
+                    inspection_frames = 0
+                    inspect_count = 0
                 self.record(dict(type='decision', observation_id=obs['id'], visual_input=getattr(self.policy, 'last_input', None), **decision))
                 print(json.dumps(self.events[-1], ensure_ascii=False), flush=True)
                 action = decision['action']
-                if self.mode == 'verify' and at_goal and action not in {'confirm', 'reject'}:
+                if self.mode == 'verify' and not anchor_subtask and at_goal and action not in {'confirm', 'reject'}:
                     status = 'unverified'
                     break
                 if action == 'confirm':
@@ -458,7 +528,7 @@ class VisualNavigator:
                 elif action in {'explore', 'uncertain'}:
                     selected, goal = None, None
                 if selected and goal is not None:
-                    if self.mode in {'candidates', 'verify'}:
+                    if self.mode in {'candidates', 'verify'} and not anchor_subtask:
                         # Same controller and metric geometry; no subsequent detector or VLM calls.
                         for _ in range(80):
                             self.notify('moving')
@@ -484,7 +554,7 @@ class VisualNavigator:
                 initial_scan += 1
                 if initial_scan % 4:
                     continue
-                exploration = self.io.explore_goal()
+                exploration = self.next_search_goal()
                 if exploration is None:
                     coverage = self.io.search_summary()
                     status = 'search_complete_no_match' if coverage['complete'] else 'search_exhausted_unresolved'
@@ -507,7 +577,7 @@ class VisualNavigator:
             if self.should_stop():
                 status, verified = 'cancelled', False
             trace = self.io.trajectory()
-            result = dict(status=status, execution_mode=self.execution_mode, runtime_version='observation-memory-v5', mode=self.mode, policy=type(self.policy).__name__, instruction=instruction,
+            result = dict(status=status, execution_mode=self.execution_mode, runtime_version='anchor-reveal-v7', mode=self.mode, policy=type(self.policy).__name__, instruction=instruction,
                           task=self.task, detection_categories=self.categories, selected=selected, verified=verified, start_position=self.io.start,
                           final_position=self.io.position.tolist(), observations=len(self.memory.observations)-self.observation_offset,
                           elapsed_seconds=time.monotonic()-begin, path_length_m=path_length(trace),

@@ -95,10 +95,19 @@ class VLMPolicy:
         summary = memory.summary()
         # Whitelist fields sent to model; do not send arbitrary file paths/scene names/GT logs.
         seen = memory.observations[-1]['seen']
-        task = getattr(self, 'task', {})
+        overall_task = getattr(self, 'task', {})
+        task = memory.ledger.stage_task(memory, overall_task)
+        anchor_stage = bool(overall_task.get('relation') and not memory.ledger.active_anchor(memory, overall_task))
+        overall_instruction = instruction
+        if anchor_stage:
+            instruction = '寻找并接近 ' + ', '.join(task['target_categories']) + '，独立核实它的类别；此阶段不要求发现最终目标或建立目标关系。'
         excluded = excluded_ids(task, memory.instances)
         excluded |= {key for key in memory.instances if memory.ledger.blocked(key, task)}
-        task_context = memory.ledger.context(memory, task)
+        if anchor_stage:
+            excluded |= {key for key, item in memory.instances.items() if memory.ledger.anchor_verdict(key, item['category']) is False}
+        task_context = memory.ledger.context(memory, overall_task)
+        if anchor_stage:
+            task_context['candidate_pairs'] = []
         ranked = sorted((item for item in summary['instances'] if item['id'] not in excluded), key=lambda i: (
             i['id'] != selected, i['category'] not in task.get('target_categories', []),
             i['id'] not in seen, -i['confidence']))
@@ -138,7 +147,7 @@ class VLMPolicy:
         observation_context = {k: v for k, v in view_context.items() if k != 'frames'}
         observation_context['search_progress'] = {k: v for k, v in (observation.get('search_progress') or {}).items()
             if k in {'total_samples', 'covered_samples', 'blocked_samples', 'pending_samples', 'completed_scans', 'complete', 'exhausted'}}
-        context = dict(observation_memory=observation_context, task_memory=task_context, memory_version=memory.version, input_stage=stage, image_policy=image_mode, evidence_expanded=expanded, arrival_geometry=arrival_geometry(observation['position'], memory.instances[selected]) if selected else None, task=getattr(self, 'task', None), instruction=instruction, observation_id=observation['id'],
+        context = dict(observation_memory=observation_context, task_memory=task_context, memory_version=memory.version, input_stage=stage, image_policy=image_mode, evidence_expanded=expanded, arrival_geometry=arrival_geometry(observation['position'], memory.instances[selected]) if selected else None, task=task, overall_task=overall_task, overall_instruction=overall_instruction, instruction=instruction, observation_id=observation['id'],
                        selected=selected, at_goal=at_goal, currently_seen=seen,
                        excluded_candidate_ids=sorted(excluded),
                        decision_feedback=getattr(self, 'decision_feedback', [])[-3:],
@@ -152,6 +161,8 @@ class VLMPolicy:
                                   for edge in relations],
                        unresolved=summary['unresolved'][-5:])
         system = (
+            'task是当前阶段任务，overall_task仅说明最终任务。SEARCH_ANCHOR阶段按单物体导航执行：选择参照物、接近、当前画面核实后confirm；不需要先找到最终目标或候选组合。确认仅完成参照物子任务，程序负责后续切换。'
+            'SEARCH_TARGET_NEAR_ANCHOR阶段围绕active_anchor_id寻找目标，不得换成另一个未经核实的参照物。'
             '你是视觉导航语义决策器。只使用所提供图像及视觉记忆，不存在真实物体表。'
             '第一张是当前机器人画面，后续图片标有候选ID和观测ID，为去背景实例截图。'
             '先核实目标类别，再判断主体属性，忽略邻近物体的颜色；类别标签也是检测假设，不是真值。颜色分数仅是弱启发，不是真值。'
@@ -217,7 +228,7 @@ class VLMPolicy:
             add_image(view['rgb'], 'historical scene view '+view['id']+' visible IDs '+','.join(view['seen'])+
                       ' observation group '+view['group_id'])
             image_ids.add(view['id'])
-        self.last_input = dict(stage=stage, image_policy=image_mode,
+        self.last_input = dict(task_phase=task_context['phase'], stage=stage, image_policy=image_mode,
                                candidate_ids=[i['id'] for i in candidates],
                                scene_view_ids=sorted(image_ids-{observation['id']}),
                                image_count=sum(i['type']=='image_url' for i in content))

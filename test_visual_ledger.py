@@ -77,8 +77,9 @@ class LedgerTests(unittest.TestCase):
             anchor = pairs[0]['anchor_id']
             self.assertEqual(nav.guard_decision(dict(action='observe', candidate_id=anchor), None, False)['action'], 'observe')
             pending = nav.guard_decision(dict(action='select', candidate_id=a), None, False)
-            self.assertEqual(pending['candidate_id'], anchor)
+            self.assertEqual(pending['action'], 'explore')
             m.ledger.anchors[anchor] = dict(verified=True)
+            m.ledger.active_anchor_id = anchor
             selected = nav.guard_decision(dict(action='select', candidate_id=a), None, False)
             self.assertEqual(selected['reference_id'], anchor)
             m.ledger.record(a, 'o2', 'wrong relation', 'relation_mismatch', anchor)
