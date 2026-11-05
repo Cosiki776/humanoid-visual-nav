@@ -361,7 +361,7 @@ nohup /home/caosiqi/miniconda3/envs/habitat/bin/python compare_navigation.py \
   --output outputs/navigation_compare_manual > /tmp/navigation_compare_manual.log 2>&1 &
 ```
 
-`compare_navigation.py` 用同一场景/种子，且将云端实际起点传给本地运行；默认 24 次观察、实时行走、不输出网页视频。`summary.json` 区分 `process_wall_seconds`（启动到退出）、`elapsed_seconds`（导航循环）、`llm_wall_seconds`（包含解析请求的全部模型请求）、`llm_decision_seconds`、`llm_instruction_seconds`、感知与记忆耗时。`setup_seconds` 包含初始化和指令解析，不应再次叠加解析耗时；`non_llm_process_seconds` 为总时间减去模型请求时间，包含初始化、感知、行走、规划、存盘和退出，不是纯运动时间。每次独立初始化；模型加载和缓存情况保留在逐请求记录中。报告必须一起比较终止状态、路径长度与观察次数，一次运行不能代表稳定性能或独立 GT 成功率。
+`compare_navigation.py` 用同一场景/种子，且将云端实际起点传给本地运行；默认 24 次观察、异步执行、实时行走、不输出网页视频。默认的 `summary.json` 和 `report.md` 分别报告完整导航循环墙钟时间 `navigation_seconds` 与 LLM 请求累计时间 `llm_request_seconds`。异步模式下模型请求可能与移动重叠，两项不能相减。加 `--warm-local` 可在本地试验前预加载模型，加载结果仍会记录用于核验；完整诊断数据保存在 `diagnostics.json`。如需让 `summary.json` 也包含完整进程字段，可加 `--include-process-timing`。诊断数据区分 `process_wall_seconds`（启动到退出）、`elapsed_seconds`（导航循环）、`llm_wall_seconds`（包含解析请求的全部模型请求）、`llm_decision_seconds`、`llm_instruction_seconds`、感知与记忆耗时。`setup_seconds` 包含初始化和指令解析，不应再次叠加解析耗时；`non_llm_process_seconds` 为总时间减去模型请求时间，包含初始化、感知、行走、规划、存盘和退出，不是纯运动时间。模型加载和缓存情况保留在逐请求记录中。报告必须一起比较终止状态、路径长度与观察次数，一次运行不能代表稳定性能或独立 GT 成功率。
 
 ### 启动预热与本地模型驻留
 
