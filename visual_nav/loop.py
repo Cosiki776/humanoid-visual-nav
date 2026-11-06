@@ -90,6 +90,12 @@ class VisualNavigator:
         self.current_observation = None
         self.task = task
         self.program_control = bool(getattr(policy, 'program_control', False) and task and task.get('relation', '') in ('', 'near'))
+        self.direct_relation = bool(self.program_control and task.get('relation') == 'near'
+                                    and hasattr(detector, 'segment_boxes'))
+        if self.direct_relation:
+            from .direct_relation import DirectRelationPerception
+            task['relation_source'] = 'vlm_grounding'
+            self.detector = DirectRelationPerception(detector, policy, task)
         self.inspection_counts = {}
         self.deferred = set()
         self.inspection_positions = {}
@@ -164,7 +170,7 @@ class VisualNavigator:
         return obs
 
     def advance(self, goal, instruction, selected=None):
-        if self.execution_mode != 'async' or self.mode != 'active_verify':
+        if self.direct_relation or self.execution_mode != 'async' or self.mode != 'active_verify':
             return self.io.advance(goal, budget=self.travel_budget)
         from .async_runtime import AsyncInference, semantic_signature, worthwhile_sample
         if self.runtime is None:
@@ -260,6 +266,8 @@ class VisualNavigator:
         return event
 
     def run(self, instruction):
+        if self.direct_relation:
+            self.task['instruction'] = instruction
         begin = time.monotonic()
         selected, goal, exploration = None, None, None
         approaching = False
@@ -277,6 +285,19 @@ class VisualNavigator:
                     status = 'cancelled'
                     break
                 search_yaw = None
+                if self.direct_relation and selected and goal is not None and horizontal_distance(self.io.position, goal) >= .18:
+                    if transit_steps >= 40:
+                        status = 'target_approach_unresolved'
+                        break
+                    before = self.io.position.copy()
+                    self.notify('moving')
+                    event = self.advance(goal, instruction, selected)
+                    self.record(dict(type='execution', candidate_id=selected, **event))
+                    transit_steps += 1
+                    if event['status'] != 'succeeded' or horizontal_distance(before,self.io.position) < .05:
+                        status = 'target_approach_unresolved'
+                        break
+                    continue
                 if hasattr(self.io, 'search_yaw'):
                     scans = self.io.search_summary()['completed_scans']
                     if exploration_until_scan is not None and scans >= exploration_until_scan:

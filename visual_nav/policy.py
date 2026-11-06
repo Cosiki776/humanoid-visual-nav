@@ -97,6 +97,9 @@ class VLMPolicy:
         return self.task
 
     def decide(self, instruction, observation, memory, selected=None, at_goal=False):
+        if getattr(self, 'task', {}).get('relation_source') == 'vlm_grounding':
+            from .direct_relation import decide_direct
+            return decide_direct(self, observation, memory, selected, at_goal)
         if getattr(self, 'program_control', False) and getattr(self, 'task', {}).get('relation') == 'near':
             from .near_navigation import decide_near
             return decide_near(self, observation, memory, selected, at_goal)

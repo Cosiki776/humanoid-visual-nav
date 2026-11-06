@@ -30,9 +30,9 @@ function renderCallStatus(s){
  const answer=call.answer||{},hint=answer.target_hint;
  const target=hint?.candidate_id||answer.candidate_id;
  const relationOK=answer.reference_match===undefined||(answer.reference_match==='yes'&&answer.relation_match==='yes');
- const approach=!!hint||answer.approach_recommended||answer.action==='select'||(answer.category_match==='yes'&&answer.attributes_match==='yes'&&relationOK);
+ const approach=answer.found===true||!!hint||answer.approach_recommended||answer.action==='select'||(answer.category_match==='yes'&&answer.attributes_match==='yes'&&relationOK);
  const pair=answer.reference_id?` · 参照 ${answer.reference_id}：${answer.reference_match} · 旁边关系：${answer.relation_match}`:'';
- const modelText=(approach?`建议靠近 ${target||''}`:answer.action?`${actions[answer.action]||answer.action} ${target||''}`:`${target||''} 类别=${answer.category_match||'?'}，属性=${answer.attributes_match||'?'}`)+pair;
+ const modelText=(typeof answer.found==='boolean'?(answer.found?`已定位 ${answer.target?.category||'目标'} + ${answer.reference?.category||'参照'}，等待深度/规划检查`:'本帧未找到符合关系的物体'):approach?`建议靠近 ${target||''}`:answer.action?`${actions[answer.action]||answer.action} ${target||''}`:`${target||''} 类别=${answer.category_match||'?'}，属性=${answer.attributes_match||'?'}`)+pair;
  const index=events.findLastIndex(e=>e.type==='vlm_call'&&e.call===call.call&&e.status==='returned');
  const after=index<0?[]:events.slice(index+1);
  let handling='已返回，等待程序处理';
