@@ -69,6 +69,11 @@ class VLMPolicy:
         self.metrics = []
         self.trace_dir = None
         self.calls = 0
+        decision_mode = os.environ.get('NAV_DECISION_MODE', 'program')
+        if decision_mode not in {'program', 'legacy'}:
+            raise ValueError('NAV_DECISION_MODE must be program or legacy')
+        self.program_control = decision_mode == 'program'
+        self.visual_checks = {}
 
     def parse_instruction(self, instruction):
         simple = simple_navigation_task(instruction)
@@ -92,6 +97,9 @@ class VLMPolicy:
         return self.task
 
     def decide(self, instruction, observation, memory, selected=None, at_goal=False):
+        if getattr(self, 'program_control', False) and getattr(self, 'task', None) and not self.task.get('relation'):
+            from .verification import decide_verified
+            return decide_verified(self, observation, memory, selected, at_goal)
         summary = memory.summary()
         # Whitelist fields sent to model; do not send arbitrary file paths/scene names/GT logs.
         seen = memory.observations[-1]['seen']

@@ -43,4 +43,12 @@ def excluded_ids(task, instances):
         surface_gap = np.linalg.norm(np.maximum(0, np.maximum(lo-ahi, alo-hi)))
         if (volume > 1e-9 and np.prod(overlap)/volume >= .5) or surface_gap <= .15:
             excluded.add(key)
+    changed = True
+    while changed:
+        changed = False
+        for key, item in instances.items():
+            links = set(item.get('possible_same_ids', []))
+            if (key in excluded or links & excluded) and not ({key} | links) <= excluded:
+                excluded.update({key} | links)
+                changed = True
     return excluded

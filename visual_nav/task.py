@@ -49,7 +49,7 @@ _SIMPLE_COLORS = {'红色':'red','白色':'white','棕色':'brown','褐色':'bro
 
 def simple_navigation_task(instruction):
     text = instruction.strip().rstrip('。！!')
-    pattern = (r'(?:请)?(?:走到|走向|前往|去|找到|寻找|靠近)\s*'
+    pattern = (r'(?:请)?(?:走到|走向|前往|去|找到|寻找|找|靠近)\s*'
                r'(?P<another>另(?:外)?一(?:个|把|张|台|盏)?)?'
                r'(?:(?:任意|任何)(?:一)?(?:个|把|张|台|盏)?)?\s*'
                r'(?P<color>'+ '|'.join(_SIMPLE_COLORS) +r')?\s*(?:的)?'

@@ -80,6 +80,7 @@ class GroundedSAM:
                 Image.fromarray(masked[ys.min():ys.max()+1, xs.min():xs.max()+1]).save(crop_path)
                 Image.fromarray(mask.astype('uint8')*255).save(mask_path)
                 results.append(dict(category=category, confidence=float(boxes['scores'][index]),
+                                    bbox=box.tolist(),
                                     points=points, crop=str(crop_path), mask=str(mask_path),
                                     attributes={'color_scores': color_scores(rgb, mask)}))
         return results

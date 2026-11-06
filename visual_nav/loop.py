@@ -70,12 +70,15 @@ class VisualNavigator:
         self.event_callback = event_callback
         self.current_observation = None
         self.task = task
+        self.program_control = bool(getattr(policy, 'program_control', False) and task and not task.get('relation'))
         self.inspection_counts = {}
         self.deferred = set()
         self.inspection_positions = {}
         if task and task.get('another') and not task.get('excluded_goal'):
             raise ValueError('“另一个”需要会话中已确认目标作为固定参照')
         self.categories = tuple(task["detection_categories"]) if task else COMMON_CATEGORIES
+        if self.program_control:
+            self.categories = tuple(dict.fromkeys(task['target_categories'] + task.get('reference_categories', [])))
 
     def notify(self, phase):
         if self.event_callback:
@@ -138,7 +141,7 @@ class VisualNavigator:
             updated = semantic_signature(self.memory, self.task, selected)
             missed = missed+1 if selected and selected not in seen else 0
             changed = updated != signature or missed == 2
-            if allow_decision and changed and runtime.reasoning is None and not self.should_stop():
+            if allow_decision and changed and runtime.reasoning is None and not self.should_stop() and not self.program_control:
                 if runtime.submit_decision(instruction, obs, self.memory, selected):
                     decision_source = obs['id']
                     self.record(dict(type='async_decision_requested', observation_id=obs['id'],
@@ -225,7 +228,7 @@ class VisualNavigator:
                     if exploration_until_scan is not None and scans >= exploration_until_scan:
                         exploration_until_scan = None
                         inspection_frames = 0
-                    if inspection_frames >= 6 and exploration_until_scan is None:
+                    if inspection_frames >= 6 and exploration_until_scan is None and not self.program_control:
                         selected, goal = None, None
                         # Complete this area, then inspect another area before
                         # ambiguous candidates can interrupt exploration again.
@@ -260,6 +263,10 @@ class VisualNavigator:
                 reference = reference_for(selected, self.task, self.memory) if selected else None
                 kwargs = {'look_at': joint_aim(self.memory.instances[selected], reference)} if selected else {'yaw': search_yaw if search_yaw is not None else initial_scan*math.pi/2}
                 obs = self.observe(**kwargs)
+                if selected and selected in excluded_ids(self.task, self.memory.instances):
+                    self.record(dict(type='identity_excluded', candidate_id=selected,
+                                     reason='New evidence links candidate to previous goal'))
+                    selected, goal = None, None
                 if selected:
                     self.inspection_positions.setdefault(selected, []).append(self.io.position.tolist())
                     inspection_frames += 1
@@ -290,6 +297,15 @@ class VisualNavigator:
                                      reason='Bounded candidate inspection: continuing geometric search with visual memory updates')
                                 if exploration_until_scan is not None else
                                 self.policy.decide(instruction, obs, self.memory, selected, at_goal))
+                    if self.program_control and decision['action'] == 'defer':
+                        key = decision['candidate_id']
+                        self.deferred.add(key)
+                        self.policy.deferred_candidate_ids = sorted(self.deferred)
+                        if self.task is not None:
+                            self.task['deferred_candidate_ids'] = sorted(self.deferred)
+                        self.record(dict(type='candidate_deferred', candidate_id=key, reason=decision['reason']))
+                        selected, goal, inspection_frames = None, None, 0
+                        continue
                     validate_decision(decision, self.memory.instances, obs['id'],
                                       self.memory.observations[-1]['seen'], selected, at_goal)
                     validate_target_change(decision, self.memory, self.task, selected, at_goal)
@@ -361,6 +377,10 @@ class VisualNavigator:
                             continue
                     if not options:
                         self.memory.questions.append('No reachable docking point for '+selected)
+                        self.deferred.add(selected)
+                        self.policy.deferred_candidate_ids = sorted(self.deferred)
+                        if self.task is not None:
+                            self.task['deferred_candidate_ids'] = sorted(self.deferred)
                         selected, goal = None, None
                     else:
                         if at_goal and action in {'observe', 'select'}:
@@ -428,6 +448,7 @@ class VisualNavigator:
                 status, verified = 'cancelled', False
             trace = self.io.trajectory()
             result = dict(status=status, execution_mode=self.execution_mode, runtime_version='evidence-navigation-v3', mode=self.mode, policy=type(self.policy).__name__, instruction=instruction,
+                          decision_mode='program' if self.program_control else 'legacy',
                           task=self.task, detection_categories=self.categories, selected=selected, verified=verified, start_position=self.io.start,
                           final_position=self.io.position.tolist(), observations=len(self.memory.observations)-self.observation_offset,
                           elapsed_seconds=time.monotonic()-begin, path_length_m=path_length(trace),

@@ -1,3 +1,5 @@
+当前单目标默认流程、连续指令实测与限制：见 [PROGRAM_NAVIGATION.md](PROGRAM_NAVIGATION.md)。
+
 新版 P1–P4（身份与搜索、视图记忆、关系观察、异步执行）：见 [NAV_IMPROVEMENTS.md](NAV_IMPROVEMENTS.md)。
 
 # 视觉导航第一版
