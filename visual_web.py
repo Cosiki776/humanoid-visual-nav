@@ -80,6 +80,19 @@ class VisualApp:
                 self.state['observation'] = dict(id=frames[-1].stem, rgb_path=str(frames[-1]))
             return self.snapshot()
 
+    def initialize(self):
+        """Warm up the simulator once, without creating a navigation task."""
+        with self.lock:
+            if self.busy or self.process is not None or self.jpeg is not None or self.state.get('phase') == 'error':
+                return self.snapshot()
+            session_dir = bootstrap.ROOT/'outputs'/self.session_id
+            session_dir.mkdir(parents=True, exist_ok=True)
+            self.busy = True
+            self.started = time.monotonic()
+            self.state.update(phase='loading', instruction='加载初始画面')
+            threading.Thread(target=self.worker, args=(None, 0, session_dir/'preview'), daemon=True).start()
+            return self.snapshot()
+
     def submit(self, data):
         instruction = data.get('instruction','')
         budget = data.get('max_observations',24)
@@ -90,7 +103,8 @@ class VisualApp:
         with self.lock:
             if self.busy:
                 raise ValueError('当前任务正在执行，请先停止或等待完成')
-            if not self.configured:
+            from visual_nav.directional import parse_directional
+            if not self.configured and parse_directional(instruction) is None:
                 raise ValueError('请先配置视觉模型 API 后重启服务')
             if self.process is not None and self.process.poll() is not None:
                 raise ValueError('会话进程已退出，当前位置无法继续；请新建会话，不会自动回到起点')
@@ -192,8 +206,14 @@ class VisualApp:
                                 raise RuntimeError('Session task response mismatch')
                             completed = True
                             break
+                        elif event.get('type') == 'session_ready' and instruction is None:
+                            self.state.update(phase='idle', instruction='', position=event.get('position'))
+                            completed = True
+                            break
                 with self.lock:
-                    if completed and (output/'result.json').exists():
+                    if completed and instruction is None:
+                        pass
+                    elif completed and (output/'result.json').exists():
                         result = json.loads((output/'result.json').read_text())
                         result.pop('selected_points',None)
                         self.state.update(result, phase=result['status'])
@@ -325,6 +345,8 @@ def handler_for_visual(app, legacy_factory):
                     raise ValueError('Expected JSON object')
                 if self.path=='/api/command':
                     return self.body(202,app.submit(data))
+                if self.path=='/api/session/initialize':
+                    return self.body(200,app.initialize())
                 if self.path=='/api/load':
                     return self.body(200,app.load(data.get('run')))
                 if self.path=='/api/session/new':

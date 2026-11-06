@@ -54,6 +54,19 @@ def main():
     try:
         for line in sys.stdin:
             command = json.loads(line)
+            if command.get('instruction') is None:
+                # Preview only: no detector, model call, task history or movement.
+                try:
+                    output = args.session_dir
+                    if simulator is None:
+                        from visual_nav.habitat_io import HabitatIO
+                        simulator = HabitatIO(args.scene, output, frame_callback=frame, realtime=True)
+                    frame(simulator._world.frame(simulator.position))
+                    emit(dict(type='session_ready', position=list(map(float, simulator.position))))
+                except Exception as exc:
+                    emit(dict(type='run_error', message=str(exc), error_type=type(exc).__name__))
+                    raise
+                continue
             output = Path(command['output'])
             output.mkdir(parents=True, exist_ok=False)
             stop = lambda: (args.session_dir/'cancel.request').exists()
@@ -66,6 +79,15 @@ def main():
                 simulator.begin_task(output, stop)
                 # Re-publish the actual current pose, including after history playback.
                 frame(simulator._world.frame(simulator.position))
+                from visual_nav.directional import parse_directional, run_directional
+                movement = parse_directional(command['instruction'])
+                if movement:
+                    emit(dict(type='task',task=movement,parse_seconds=0))
+                    save_json(output/'task.json',movement)
+                    save_json(output/'config.json',dict(command,session_id=args.session_dir.name,scene=args.scene))
+                    result=run_directional(simulator,movement,command['instruction'],memory,emit)
+                    save_json(output/'trajectory.json',simulator.trajectory())
+                    continue
                 if detector is None:
                     from visual_nav.perception import GroundedSAM
                     detector = GroundedSAM(str(bootstrap.WORKSPACE/'weights/sam_vit_b_01ec64.pth'),
