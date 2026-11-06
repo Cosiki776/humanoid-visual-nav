@@ -4,7 +4,8 @@ import io
 import json
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+from .annotations import draw_labels
 
 from .geometry import horizontal_distance
 from .task_context import excluded_ids
@@ -75,26 +76,8 @@ def evidence_content(observation, item, task, memory):
 
     with Image.open(observation['rgb_path']) as source:
         scene = source.convert('RGB')
-    draw = ImageDraw.Draw(scene)
-    for candidate in visible:
-        box = candidate['evidence'][-1].get('bbox')
-        if box is None:
-            continue
-        color = (255, 210, 0) if candidate['id'] == key else (0, 220, 255)
-        draw.rectangle(tuple(box), outline=color, width=3)
-        label = candidate['id']+' '+candidate['category']
-        if candidate['id'] in excluded:
-            label += ' excluded'
-        try:
-            font = ImageFont.truetype('DejaVuSans.ttf', 16)
-        except OSError:
-            font = ImageFont.load_default()
-        left, top, right, bottom = draw.textbbox((0, 0), label, font=font)
-        width, height = right-left+8, bottom-top+6
-        x = max(0, min(box[0], scene.width-width))
-        y = max(0, box[1]-height)
-        draw.rectangle((x, y, x+width, y+height), fill=color)
-        draw.text((x+4-left, y+3-top), label, font=font, fill=(0, 0, 0))
+    draw_labels(scene, [dict(id=i['id'], category=i['category'], bbox=i['evidence'][-1].get('bbox'))
+                        for i in visible], selected=key, excluded=excluded)
     scene.save(Path(observation['rgb_path']).with_name(observation['id']+'_'+key+'_annotated.jpg'), quality=90)
     add(scene, 'Current scene. Yellow box identifies candidate '+key+
         '; detected category: '+category+' (detector hypothesis, verify visually).')

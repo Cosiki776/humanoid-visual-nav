@@ -1,0 +1,48 @@
+{
+  "observation_id": "obs_00025",
+  "candidate_id": "v0027",
+  "detected_category": "cabinet",
+  "target_categories": [
+    "cabinet"
+  ],
+  "attributes": [
+    "blue"
+  ],
+  "identity_state": "tentative",
+  "visible_candidates": [
+    {
+      "id": "v0027",
+      "detected_category": "cabinet",
+      "bbox": [
+        266.75970458984375,
+        287.0616455078125,
+        439.29095458984375,
+        366.02911376953125
+      ],
+      "excluded": false
+    },
+    {
+      "id": "v0028",
+      "detected_category": "cabinet",
+      "bbox": [
+        225.81930541992188,
+        279.9868469238281,
+        273.76739501953125,
+        352.9314880371094
+      ],
+      "excluded": false
+    },
+    {
+      "id": "v0029",
+      "detected_category": "cabinet",
+      "bbox": [
+        623.068603515625,
+        310.91839599609375,
+        654.6614379882812,
+        360.19091796875
+      ],
+      "excluded": false
+    }
+  ],
+  "excluded_previous_id": null
+}

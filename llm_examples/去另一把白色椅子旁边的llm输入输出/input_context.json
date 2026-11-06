@@ -1,0 +1,37 @@
+{
+  "observation_id": "obs_00014",
+  "candidate_id": "v0018",
+  "detected_category": "chair",
+  "target_categories": [
+    "chair"
+  ],
+  "attributes": [
+    "white"
+  ],
+  "identity_state": "tentative",
+  "visible_candidates": [
+    {
+      "id": "v0017",
+      "detected_category": "chair",
+      "bbox": [
+        159.72064208984375,
+        302.0284423828125,
+        230.26541137695312,
+        457.97760009765625
+      ],
+      "excluded": false
+    },
+    {
+      "id": "v0018",
+      "detected_category": "chair",
+      "bbox": [
+        705.606201171875,
+        252.0787353515625,
+        760.3946533203125,
+        290.5179443359375
+      ],
+      "excluded": false
+    }
+  ],
+  "excluded_previous_id": "v0001"
+}

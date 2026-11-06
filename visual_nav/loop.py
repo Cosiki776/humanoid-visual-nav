@@ -106,6 +106,18 @@ class VisualNavigator:
         self.events.append(event)
         self.notify(event['type'])
 
+    def detection_overlay(self, obs, seen):
+        """Snapshot frame-local boxes before rolling instance evidence changes."""
+        boxes = []
+        for key in seen:
+            item = self.memory.instances[key]
+            for evidence in item['evidence']:
+                if evidence['observation_id'] == obs['id'] and evidence.get('bbox') is not None:
+                    boxes.append(dict(id=key, category=item['category'],
+                                      bbox=evidence['bbox'], confidence=evidence['confidence']))
+        self.current_observation = dict(id=obs['id'], rgb_path=obs['rgb_path'], detections=boxes)
+        return boxes
+
     def observe(self, **kwargs):
         started = time.perf_counter()
         obs = self.io.observe(**kwargs)
@@ -116,11 +128,13 @@ class VisualNavigator:
         detected = time.perf_counter()
         self.perception_seconds = detected-captured
         seen = self.memory.integrate(detections, obs)
+        boxes = self.detection_overlay(obs, seen)
         integrated = time.perf_counter()
         if self.events and self.events[-1]['type'] == 'execution':
             self.events[-1]['keyframes'] = [obs['id']]
             self.events[-1]['discoveries'] = seen
         self.record(dict(type='observation', id=obs['id'], seen=seen, position=obs['position'],
+                         detections=boxes,
                          capture_seconds=captured-started, perception_seconds=detected-captured,
                          memory_seconds=integrated-detected))
         print(json.dumps(self.events[-1]), flush=True)
@@ -149,7 +163,9 @@ class VisualNavigator:
             self.perception_seconds = elapsed
             self.current_observation = dict(id=obs['id'], rgb_path=obs['rgb_path'])
             seen = self.memory.integrate(detections, obs)
+            boxes = self.detection_overlay(obs, seen)
             self.record(dict(type='observation', id=obs['id'], seen=seen, position=obs['position'],
+                             detections=boxes,
                              perception_seconds=elapsed, asynchronous=True))
             updated = semantic_signature(self.memory, self.task, selected)
             missed = missed+1 if selected and selected not in seen else 0
