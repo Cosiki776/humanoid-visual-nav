@@ -43,6 +43,15 @@ def validate_target_change(decision, memory, task, selected, at_goal, program_co
         reference = decision.get('reference_id')
         item = memory.instances.get(reference, {})
         current = memory.observations[-1]
+        if program_control and task.get('relation') == 'near':
+            from .near_navigation import relation_evidence
+            if (reference != task.get('near_references', {}).get(key)
+                    or item.get('category') not in task.get('reference_categories', [])
+                    or decision.get('reference_verified') is not True
+                    or not str(decision.get('reference_reason') or '').strip()
+                    or not relation_evidence(memory, key, reference, current, final=True)):
+                raise DecisionValidationError('Near confirmation needs verified bound reference and current or recent multiview geometry', decision)
+            return
         if (reference == key or reference not in current['seen'] or
                 item.get('category') not in task.get('reference_categories', []) or
                 decision.get('reference_verified') is not True or
@@ -80,7 +89,7 @@ class VisualNavigator:
         self.event_callback = event_callback
         self.current_observation = None
         self.task = task
-        self.program_control = bool(getattr(policy, 'program_control', False) and task and not task.get('relation'))
+        self.program_control = bool(getattr(policy, 'program_control', False) and task and task.get('relation', '') in ('', 'near'))
         self.inspection_counts = {}
         self.deferred = set()
         self.inspection_positions = {}

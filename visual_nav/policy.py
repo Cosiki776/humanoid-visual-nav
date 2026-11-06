@@ -97,6 +97,9 @@ class VLMPolicy:
         return self.task
 
     def decide(self, instruction, observation, memory, selected=None, at_goal=False):
+        if getattr(self, 'program_control', False) and getattr(self, 'task', {}).get('relation') == 'near':
+            from .near_navigation import decide_near
+            return decide_near(self, observation, memory, selected, at_goal)
         if getattr(self, 'program_control', False) and getattr(self, 'task', None) and not self.task.get('relation'):
             from .verification import decide_verified
             return decide_verified(self, observation, memory, selected, at_goal)

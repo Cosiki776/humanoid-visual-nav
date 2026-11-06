@@ -29,8 +29,10 @@ function renderCallStatus(s){
  if(call.status==='error'){callStatus.textContent=detection+'\n'+prefix+' · 请求失败：'+call.error;return;}
  const answer=call.answer||{},hint=answer.target_hint;
  const target=hint?.candidate_id||answer.candidate_id;
- const approach=!!hint||answer.approach_recommended||answer.action==='select'||(answer.category_match==='yes'&&answer.attributes_match==='yes');
- const modelText=approach?`建议靠近 ${target||''}`:answer.action?`${actions[answer.action]||answer.action} ${target||''}`:`${target||''} 类别=${answer.category_match||'?'}，属性=${answer.attributes_match||'?'}`;
+ const relationOK=answer.reference_match===undefined||(answer.reference_match==='yes'&&answer.relation_match==='yes');
+ const approach=!!hint||answer.approach_recommended||answer.action==='select'||(answer.category_match==='yes'&&answer.attributes_match==='yes'&&relationOK);
+ const pair=answer.reference_id?` · 参照 ${answer.reference_id}：${answer.reference_match} · 旁边关系：${answer.relation_match}`:'';
+ const modelText=(approach?`建议靠近 ${target||''}`:answer.action?`${actions[answer.action]||answer.action} ${target||''}`:`${target||''} 类别=${answer.category_match||'?'}，属性=${answer.attributes_match||'?'}`)+pair;
  const index=events.findLastIndex(e=>e.type==='vlm_call'&&e.call===call.call&&e.status==='returned');
  const after=index<0?[]:events.slice(index+1);
  let handling='已返回，等待程序处理';

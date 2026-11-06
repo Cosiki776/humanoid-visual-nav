@@ -6,6 +6,11 @@ from .geometry import horizontal_distance, path_length
 
 def reference_for(target_id, task, memory):
     target = memory.instances[target_id]
+    bound = (task or {}).get('near_references', {}).get(target_id)
+    if bound in memory.instances and bound != target_id:
+        reference = memory.instances[bound]
+        if reference['category'] in (task or {}).get('reference_categories', []):
+            return reference
     candidates = [i for i in memory.instances.values()
                   if i['category'] in (task or {}).get('reference_categories', []) and i['id'] != target_id]
     links = {edge['target'] if edge['source'] == target_id else edge['source']
