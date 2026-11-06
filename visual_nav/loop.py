@@ -73,6 +73,10 @@ class VisualNavigator:
         self.observation_offset = len(self.memory.observations)
         self.should_stop = should_stop or (lambda: False)
         self.events = []
+        from queue import SimpleQueue
+        self.request_events = SimpleQueue()
+        if self.policy is not None:
+            self.policy.request_callback = self.on_vlm_call
         self.event_callback = event_callback
         self.current_observation = None
         self.task = task
@@ -86,11 +90,19 @@ class VisualNavigator:
         if self.program_control:
             self.categories = tuple(dict.fromkeys(task['target_categories'] + task.get('reference_categories', [])))
 
+    def on_vlm_call(self, event):
+        # Worker threads must not inspect simulator or mutable object memory.
+        self.request_events.put(event)
+        if self.event_callback:
+            self.event_callback(dict(type='live_state', vlm_status=event))
+
     def notify(self, phase):
+        while not self.request_events.empty():
+            self.events.append(self.request_events.get())
         if self.event_callback:
             self.event_callback(dict(type='live_state', runtime_version='evidence-navigation-v3', execution_mode=self.execution_mode, phase=phase, task=self.task, arrival_geometry=getattr(self, 'proximity', None),
                                      excluded_candidate_ids=sorted(excluded_ids(self.task, self.memory.instances)),
-                                     observation=self.current_observation, memory=self.memory.summary(),
+                                     observation=self.current_observation, memory=self.memory.summary(), vlm_observability=True,
                                      events=self.events[-100:], observations=len(self.memory.observations)-self.observation_offset,
                                      position=self.io.position.tolist(),
                                      search_coverage=self.io.search_summary()))
@@ -103,6 +115,8 @@ class VisualNavigator:
             self.task['deferred_candidate_ids'] = sorted(self.deferred)
 
     def record(self, event):
+        while not self.request_events.empty():
+            self.events.append(self.request_events.get())
         self.events.append(event)
         self.notify(event['type'])
 
@@ -409,6 +423,8 @@ class VisualNavigator:
                             at_goal = False
                         else:
                             self.memory.questions.append('No new estimated joint viewpoint for '+selected)
+                            self.record(dict(type='approach_blocked', candidate_id=selected,
+                                             reason='No new reachable inspection viewpoint'))
                             self.defer_candidate(selected)
                             selected, goal = None, None
                             continue
@@ -432,6 +448,8 @@ class VisualNavigator:
                             break
                     if not options:
                         self.memory.questions.append('No reachable docking point for '+selected)
+                        self.record(dict(type='approach_blocked', candidate_id=selected,
+                                         reason='No reachable docking point'))
                         self.defer_candidate(selected)
                         selected, goal = None, None
                     else:
@@ -464,8 +482,10 @@ class VisualNavigator:
                             break
                         continue
                     self.notify('moving')
+                    self.record(dict(type='target_motion', candidate_id=selected,
+                                     reason='Controller requested to approach target'))
                     event = self.advance(goal, instruction, selected)
-                    self.record(dict(type='execution', **event))
+                    self.record(dict(type='execution', candidate_id=selected, **event))
                     if event['status'] != 'succeeded':
                         self.memory.questions.append('Movement failed; target validity unresolved')
                         selected, goal = None, None
@@ -496,6 +516,8 @@ class VisualNavigator:
                 self.io.settle()
             if self.runtime is not None:
                 self.runtime.close()
+            while not self.request_events.empty():
+                self.events.append(self.request_events.get())
             if self.should_stop():
                 status, verified = 'cancelled', False
             trace = self.io.trajectory()
