@@ -15,6 +15,7 @@
 <script>
 const $=id=>document.getElementById(id);let state={},cardsSignature='',eventsSignature='',frameKey='',selectedFrame=null,viewing='motion',observerRun='';
 const phases={async_decision_requested:'行走中 · 后台判断',async_decision:'行走观察结果',async_decision_invalid:'行走判断需重新核实',inspection_plan:'前往补充观察位置',candidate_deferred:'暂缓不确定目标',search_resume:'推进到新搜索区域',decision_retry:'证据不足 · 重新观察',decision_unresolved:'目标尚未核实',idle:'待命',loading:'加载场景与模型',perception:'检测与分割',observation:'更新物体记忆',thinking:'等待 VLM',moving:'规划并移动',execution:'移动完成',decision:'已获得决策',succeeded:'视觉核实完成',budget_exhausted:'观察预算已用尽',search_complete_no_match:'搜索完成 · 未找到',search_exhausted_unresolved:'搜索结束 · 有未解决区域',error:'运行出错',cancelled:'已停止',stopping:'正在停止',unverified:'尚未核实',rejected_target:'候选不符',arrived_unverified:'已接近 · 未核实'};
+Object.assign(phases,{docking_plan:'检查目标停靠位置',approach_plan:'先靠近目标补充观察',approach_blocked:'目标接近受阻',target_approach_unresolved:'已发现目标 · 停靠未解决'});
 const actions={select:'选择目标',observe:'换角度观察',explore:'继续搜索',confirm:'确认到达',reject:'排除候选',uncertain:'证据不足'};
 const labels={chair:'椅子',cabinet:'柜子',table:'桌子',sofa:'沙发',bed:'床',door:'门',refrigerator:'冰箱',microwave:'微波炉',lamp:'灯',monitor:'显示器',television:'电视',plant:'植物',sink:'水槽'};
 const asset=name=>{const parts=name.split('/');const run=parts.length>1?parts.at(-2):state.run;return '/api/asset?run='+encodeURIComponent(run)+'&name='+encodeURIComponent(parts.at(-1));};

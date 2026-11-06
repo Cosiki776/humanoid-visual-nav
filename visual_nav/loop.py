@@ -223,6 +223,8 @@ class VisualNavigator:
     def run(self, instruction):
         begin = time.monotonic()
         selected, goal, exploration = None, None, None
+        approaching = False
+        approach_attempts = {}
         status, verified = 'budget_exhausted', False
         initial_scan, inspect_count = 0, 0
         invalid_decisions = 0
@@ -296,7 +298,7 @@ class VisualNavigator:
                     break
                 proximity = arrival_geometry(self.io.position, self.memory.instances[selected]) if selected else None
                 self.proximity = proximity
-                at_goal = bool(selected and goal is not None and horizontal_distance(self.io.position, goal) < .18
+                at_goal = bool(selected and not approaching and goal is not None and horizontal_distance(self.io.position, goal) < .18
                                and proximity['close_enough'])
                 # Initial-view ablation freezes perception after choosing and never asks for confirmation.
                 if self.mode == 'candidates' and selected:
@@ -367,9 +369,14 @@ class VisualNavigator:
                     new = requested
                     if new != selected:
                         selected, goal, inspect_count = new, None, 0
+                        approaching = False
                         self.inspection_positions.setdefault(selected, []).append(self.io.position.tolist())
                         at_goal = False
                     options = self.io.docking_options(self.memory.instances[selected])
+                    self.record(dict(type='docking_plan', candidate_id=selected, options=len(options),
+                                     diagnostics=dict(getattr(self.io, 'last_docking_diagnostics', {}))))
+                    if options and approaching:
+                        goal, approaching = options[0], False
                     if action == 'observe' and hasattr(self.io, 'inspection_options'):
                         reference = reference_for(selected, self.task, self.memory)
                         ids = [selected] + ([reference['id']] if reference else [])
@@ -378,6 +385,7 @@ class VisualNavigator:
                             self.inspection_positions.get(selected, []))
                         if inspections:
                             goal = inspections[0]
+                            approaching = False
                             self.record(dict(type='inspection_plan', candidate_id=selected,
                                 reference_id=reference['id'] if reference else None, destination=goal.tolist(),
                                 reason='Reachable estimated joint-view geometry; visibility still needs actual observation'))
@@ -388,6 +396,24 @@ class VisualNavigator:
                             self.defer_candidate(selected)
                             selected, goal = None, None
                             continue
+                    if not options and action == 'select' and self.mode == 'active_verify' and hasattr(self.io, 'approach_options'):
+                        if approaching and goal is not None and horizontal_distance(self.io.position, goal) >= .18:
+                            options = [goal]
+                        elif approach_attempts.get(selected, 0) < 3:
+                            options = self.io.approach_options(self.memory.instances[selected],
+                                                              self.inspection_positions.get(selected, []))
+                            if options:
+                                goal, approaching = options[0], True
+                                approach_attempts[selected] = approach_attempts.get(selected, 0)+1
+                                self.record(dict(type='approach_plan', candidate_id=selected,
+                                                 destination=goal.tolist(), attempt=approach_attempts[selected],
+                                                 reason='No final docking point; approach for fresh geometry, not arrival'))
+                        if not options:
+                            status = 'target_approach_unresolved'
+                            self.record(dict(type='approach_blocked', candidate_id=selected,
+                                             attempts=approach_attempts.get(selected, 0),
+                                             reason='No new reachable approach viewpoint or approach budget exhausted'))
+                            break
                     if not options:
                         self.memory.questions.append('No reachable docking point for '+selected)
                         self.defer_candidate(selected)
@@ -468,6 +494,8 @@ class VisualNavigator:
             result['excluded_candidate_ids'] = sorted(excluded_ids(self.task, self.memory.instances))
             if status == 'decision_unresolved':
                 result['message'] = '连续三次决策缺少有效证据，机器人保持当前位置，目标尚未核实。'
+            if status == 'target_approach_unresolved':
+                result['message'] = '已发现目标候选，但未找到满足停靠条件的位置；接近观察恢复未能解决，未确认到达。'
             if status in {'search_complete_no_match', 'search_exhausted_unresolved', 'budget_exhausted'}:
                 result['message'] = {
                     'search_complete_no_match': '本轮可达搜索点已检查完，未发现符合条件的目标，停止搜索。',

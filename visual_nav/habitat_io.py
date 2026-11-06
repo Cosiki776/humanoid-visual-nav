@@ -173,23 +173,52 @@ class HabitatIO:
         pf = self._world.pf
         options = []
         used = set()
+        diagnostics = dict(sampled=0, invalid_snap=0, large_snap=0, height_rejected=0, duplicate=0,
+                           clearance_rejected=0, no_route=0, accepted=0)
         for query in boundary_samples(instance, self.position[1]):
+            diagnostics['sampled'] += 1
             point = np.asarray(pf.snap_point(query, self._world.island))
-            if not np.isfinite(point).all() or np.linalg.norm(point-query) > .15:
+            if not np.isfinite(point).all():
+                diagnostics['invalid_snap'] += 1
+                continue
+            if np.linalg.norm(point-query) > .15:
+                diagnostics['large_snap'] += 1
+            # A lateral snap is not a failure if the actual point passes the
+            # surface-clearance and route checks below. Do not snap upstairs.
+            if abs(point[1]-query[1]) > .15:
+                diagnostics['height_rejected'] += 1
                 continue
             key = tuple(np.round(point, 2))
             if key in used:
+                diagnostics['duplicate'] += 1
                 continue
             used.add(key)
             geometry = arrival_geometry(point, instance)
             if not geometry['close_enough']:
+                diagnostics['clearance_rejected'] += 1
                 continue
             path = self.route(point)
             if path is not None:
                 # First prefer the desired clearance; use path length within that band.
                 band = round(abs(geometry['estimated_boundary_gap_m']-PREFERRED_GAP), 1)
                 options.append((band, path_length(path), point))
+            else:
+                diagnostics['no_route'] += 1
+        diagnostics['accepted'] = len(options)
+        self.last_docking_diagnostics = diagnostics
         return [point for _, _, point in sorted(options, key=lambda x: (x[0], x[1]))]
+
+    def approach_options(self, instance, visited=()):
+        """Reach a new visible viewpoint without treating it as final arrival."""
+        options = self.inspection_options(instance, visited=visited)
+        current_gap = arrival_geometry(self.position, instance)['estimated_boundary_gap_m']
+        # Prefer genuine progress. When already near, a new lateral view can
+        # correct a partial surface estimate even without reducing distance.
+        limit = current_gap-.25 if current_gap > 2.5 else current_gap+.15
+        return sorted((p for p in options if
+                       arrival_geometry(p, instance)['estimated_boundary_gap_m'] < limit),
+                      key=lambda p: (arrival_geometry(p, instance)['estimated_boundary_gap_m'],
+                                     horizontal_distance(p, self.position)))
 
     def inspection_options(self, instance, reference=None, historical=(), visited=()):
         from .inspection import joint_aim, rank_viewpoints
