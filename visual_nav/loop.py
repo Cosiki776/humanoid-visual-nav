@@ -13,7 +13,7 @@ from .docking import arrival_geometry
 from .inspection import reference_for, joint_aim
 
 
-def validate_target_change(decision, memory, task, selected, at_goal):
+def validate_target_change(decision, memory, task, selected, at_goal, program_control=False):
     action, key = decision['action'], decision.get('candidate_id')
     if action in {'select', 'observe', 'confirm'} and key in (task or {}).get('deferred_candidate_ids', []):
         raise DecisionValidationError('Candidate inspection budget exhausted for this task; search elsewhere', decision)
@@ -24,7 +24,13 @@ def validate_target_change(decision, memory, task, selected, at_goal):
     if selected and key and key != selected and action in {'select', 'observe'}:
         item = memory.instances[key]
         seen = memory.observations[-1]['seen']
-        if (key not in seen or item['views'] < 2 or
+        hint = decision.get('visual_hint', {})
+        from .verification import grounded_hint
+        explicit_hint = bool(program_control and isinstance(hint, dict) and
+                             hint.get('observation_id') == memory.observations[-1]['id'] and
+                             hint.get('candidate_id') == key and grounded_hint(
+                                 {'target_hint': hint}, memory.observations[-1], memory, task))
+        if not explicit_hint and (key not in seen or item['views'] < 2 or
                 item['confidence'] < memory.instances[selected]['confidence']-.1 or
                 not isinstance(decision.get('switch_reason'), str) or not decision['switch_reason'].strip()):
             raise DecisionValidationError('Target switch lacks repeated current evidence or switch_reason; re-observe the selected target instead', decision)
@@ -88,6 +94,13 @@ class VisualNavigator:
                                      events=self.events[-100:], observations=len(self.memory.observations)-self.observation_offset,
                                      position=self.io.position.tolist(),
                                      search_coverage=self.io.search_summary()))
+
+    def defer_candidate(self, key):
+        from .verification import defer_candidate
+        defer_candidate(self.policy, self.memory, key)
+        self.deferred = set(self.policy.deferred_candidate_ids)
+        if self.task is not None:
+            self.task['deferred_candidate_ids'] = sorted(self.deferred)
 
     def record(self, event):
         self.events.append(event)
@@ -272,10 +285,7 @@ class VisualNavigator:
                     inspection_frames += 1
                     self.inspection_counts[selected] = self.inspection_counts.get(selected, 0)+1
                     if self.inspection_counts[selected] >= 6:
-                        self.deferred.add(selected)
-                        if self.task is not None:
-                            self.task['deferred_candidate_ids'] = sorted(self.deferred)
-                        self.policy.deferred_candidate_ids = sorted(self.deferred)
+                        self.defer_candidate(selected)
                         self.memory.questions.append('Inspection budget exhausted for '+selected+'; not evidence of absence')
                         self.record(dict(type='candidate_deferred', candidate_id=selected))
                         selected, goal = None, None
@@ -297,18 +307,23 @@ class VisualNavigator:
                                      reason='Bounded candidate inspection: continuing geometric search with visual memory updates')
                                 if exploration_until_scan is not None else
                                 self.policy.decide(instruction, obs, self.memory, selected, at_goal))
+                    if self.program_control:
+                        active_deferred = set(getattr(self.policy, 'deferred_candidate_ids', []))
+                        for key in self.deferred - active_deferred:
+                            self.inspection_counts.pop(key, None)
+                            self.record(dict(type='candidate_reactivated', candidate_id=key,
+                                             observation_id=obs['id'], reason='New viewpoint or larger visible extent'))
+                        self.deferred = active_deferred
+                        self.task['deferred_candidate_ids'] = sorted(self.deferred)
                     if self.program_control and decision['action'] == 'defer':
                         key = decision['candidate_id']
-                        self.deferred.add(key)
-                        self.policy.deferred_candidate_ids = sorted(self.deferred)
-                        if self.task is not None:
-                            self.task['deferred_candidate_ids'] = sorted(self.deferred)
+                        self.defer_candidate(key)
                         self.record(dict(type='candidate_deferred', candidate_id=key, reason=decision['reason']))
                         selected, goal, inspection_frames = None, None, 0
                         continue
                     validate_decision(decision, self.memory.instances, obs['id'],
                                       self.memory.observations[-1]['seen'], selected, at_goal)
-                    validate_target_change(decision, self.memory, self.task, selected, at_goal)
+                    validate_target_change(decision, self.memory, self.task, selected, at_goal, self.program_control)
                 except DecisionValidationError as exc:
                     invalid_decisions += 1
                     feedback = dict(observation_id=obs['id'], selected=selected, error=str(exc))
@@ -352,6 +367,7 @@ class VisualNavigator:
                     new = requested
                     if new != selected:
                         selected, goal, inspect_count = new, None, 0
+                        self.inspection_positions.setdefault(selected, []).append(self.io.position.tolist())
                         at_goal = False
                     options = self.io.docking_options(self.memory.instances[selected])
                     if action == 'observe' and hasattr(self.io, 'inspection_options'):
@@ -369,18 +385,12 @@ class VisualNavigator:
                             at_goal = False
                         else:
                             self.memory.questions.append('No new estimated joint viewpoint for '+selected)
-                            self.deferred.add(selected)
-                            self.policy.deferred_candidate_ids = sorted(self.deferred)
-                            if self.task is not None:
-                                self.task['deferred_candidate_ids'] = sorted(self.deferred)
+                            self.defer_candidate(selected)
                             selected, goal = None, None
                             continue
                     if not options:
                         self.memory.questions.append('No reachable docking point for '+selected)
-                        self.deferred.add(selected)
-                        self.policy.deferred_candidate_ids = sorted(self.deferred)
-                        if self.task is not None:
-                            self.task['deferred_candidate_ids'] = sorted(self.deferred)
+                        self.defer_candidate(selected)
                         selected, goal = None, None
                     else:
                         if at_goal and action in {'observe', 'select'}:

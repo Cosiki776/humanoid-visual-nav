@@ -129,6 +129,68 @@ class ProgramNavigationTests(unittest.TestCase):
         self.assertEqual(context['candidate_id'], 'v0002')
         self.assertEqual(result['action'], 'explore')
 
+    def test_unknown_first_candidate_does_not_hide_second_match(self):
+        obs = self.observe('o1', (0, 3))
+        def answer(system, content):
+            value = self.answer(system, content)
+            if value['candidate_id'] == 'v0001':
+                value['category_match'] = 'unknown'
+            return value
+        self.policy._request.side_effect = answer
+        result = self.policy.decide('', obs, self.memory)
+        self.assertEqual(result['candidate_id'], 'v0002')
+        self.assertEqual(result['action'], 'select')
+
+    def test_explicit_hint_overrides_low_detector_rank_and_switch_gate(self):
+        from visual_nav.loop import validate_target_change
+        obs = self.observe('o1', (0, 3))
+        self.memory.instances['v0002']['confidence'] = .1
+        def answer(system, content):
+            value = self.answer(system, content)
+            value.update(category_match='unknown', attributes_match='unknown', target_hint=dict(
+                candidate_id='v0002', category_match='yes', attributes_match='yes',
+                reason='White chair to the left of the refrigerator'))
+            return value
+        self.policy._request.side_effect = answer
+        result = self.policy.decide('', obs, self.memory, 'v0001')
+        self.assertEqual(result['candidate_id'], 'v0002')
+        validate_target_change(result, self.memory, self.policy.task, 'v0001', False, True)
+        self.assertFalse(self.policy.visual_checks['v0002']['matches'])
+        self.verdict = 'unknown'
+        self.policy._request.side_effect = self.answer
+        obs = self.observe('o2', (0, 3))
+        self.assertEqual(self.policy.decide('', obs, self.memory, 'v0002', True)['action'], 'observe')
+
+    def test_hint_cannot_override_previous_goal_exclusion(self):
+        from visual_nav.verification import grounded_hint
+        obs = self.observe('o1', (0, 3))
+        task = bind_task(self.policy.task, '去另一把白色椅子旁边', goal_snapshot(self.memory.instances['v0001']))
+        answer = dict(target_hint=dict(candidate_id='v0001', category_match='yes', attributes_match='yes', reason='white chair'))
+        self.assertIsNone(grounded_hint(answer, obs, self.memory, task))
+        answer['target_hint']['candidate_id'] = 'invented'
+        self.assertIsNone(grounded_hint(answer, obs, self.memory, task))
+
+    def test_approach_recommendation_is_not_arrival_confirmation(self):
+        obs = self.observe('o1')
+        self.verdict = 'unknown'
+        def answer(system, content):
+            return dict(self.answer(system, content), approach_recommended=True)
+        self.policy._request.side_effect = answer
+        self.assertEqual(self.policy.decide('', obs, self.memory)['action'], 'select')
+        obs = self.observe('o2')
+        self.assertEqual(self.policy.decide('', obs, self.memory, 'v0001', True)['action'], 'observe')
+
+    def test_deferred_candidate_needs_new_information_to_reactivate(self):
+        from visual_nav.verification import defer_candidate, recover_candidate
+        self.observe('o1')
+        self.policy.inspection_attempts = {}
+        defer_candidate(self.policy, self.memory, 'v0001')
+        self.observe('o2')
+        self.assertFalse(recover_candidate(self.policy, self.memory, 'v0001'))
+        self.memory.instances['v0001']['evidence'][-1]['bbox'] = [0, 0, 64, 64]
+        self.assertTrue(recover_candidate(self.policy, self.memory, 'v0001'))
+        self.assertNotIn('v0001', self.policy.deferred_candidate_ids)
+
     def test_deferred_candidate_does_not_disable_later_candidates(self):
         class IO:
             start = [0, 0, 0]
@@ -158,6 +220,37 @@ class ProgramNavigationTests(unittest.TestCase):
         self.assertEqual(result['selected'], 'v0002')
         self.assertIn('v0001', policy.deferred_candidate_ids)
         self.assertEqual(policy.calls, 2)
+
+        class RecoveredPolicy(Policy):
+            def decide(self, instruction, obs, memory, selected, at_goal):
+                self.calls += 1
+                if self.calls == 1:
+                    return dict(action='defer', candidate_id='v0001', reason='inconclusive')
+                self.deferred_candidate_ids = []
+                return dict(action='select', candidate_id='v0001', evidence_id=obs['id'])
+        recovered = VisualNavigator(IO(), Detector(), RecoveredPolicy(), self.tmp.name,
+                                    max_observations=2, task=self.policy.task).run('chair')
+        self.assertEqual(recovered['selected'], 'v0001')
+        self.assertTrue(any(e['type']=='candidate_reactivated' for e in recovered['events']))
+
+    def test_same_frame_alternative_checked_before_uncertain_approach(self):
+        obs = self.observe('o1', (0, 3))
+        def answer(system, content):
+            value = self.answer(system, content)
+            if value['candidate_id'] == 'v0001':
+                value.update(attributes_match='unknown', approach_recommended=True)
+            return value
+        self.policy._request.side_effect = answer
+        result = self.policy.decide('', obs, self.memory)
+        self.assertEqual(result['candidate_id'], 'v0002')
+
+    def test_unidentified_dark_patch_does_not_authorize_direct_approach(self):
+        obs = self.observe('o1')
+        def answer(system, content):
+            return dict(self.answer(system, content), category_match='unknown', attributes_match='unknown',
+                        approach_recommended=True)
+        self.policy._request.side_effect = answer
+        self.assertEqual(self.policy.decide('', obs, self.memory)['action'], 'observe')
 
 
 if __name__ == '__main__':
