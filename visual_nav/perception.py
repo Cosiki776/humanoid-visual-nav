@@ -49,6 +49,35 @@ class GroundedSAM:
                              torch=torch.__version__, transformers=transformers.__version__,
                              threshold=threshold, device=device, custom_cuda_kernels=False)
 
+    def segment_boxes(self, observation, output, boxes):
+        """VLM boxes use SAM/depth directly; GroundingDINO is not invoked."""
+        rgb = observation['rgb']
+        self.sam.set_image(rgb)
+        results = []
+        for entry in boxes:
+            box = np.asarray(entry['bbox'], dtype=float)
+            masks, scores, _ = self.sam.predict(box=box, multimask_output=True)
+            mask = masks[int(np.argmax(scores))]
+            # Do not allow a loose segmentation to absorb unrelated surroundings.
+            region = np.zeros(mask.shape, dtype=bool)
+            x1,y1,x2,y2 = box
+            region[max(0,int(y1)):min(mask.shape[0],int(np.ceil(y2))),
+                   max(0,int(x1)):min(mask.shape[1],int(np.ceil(x2)))] = True
+            mask = mask & region
+            points = unproject(observation['depth'], mask, observation['intrinsics'], observation['camera_to_world'])
+            if points is None or mask.sum() < 40:
+                continue
+            ys, xs = np.nonzero(mask)
+            stem = observation['id']+'_vlm_'+entry['role']
+            crop, mask_path = Path(output)/(stem+'_crop.jpg'), Path(output)/(stem+'_mask.png')
+            masked = np.where(mask[:,:,None], rgb, np.full_like(rgb,127))
+            Image.fromarray(masked[ys.min():ys.max()+1,xs.min():xs.max()+1]).save(crop)
+            Image.fromarray(mask.astype('uint8')*255).save(mask_path)
+            results.append(dict(category=entry['category'], role=entry['role'], confidence=.5,
+                bbox=box.tolist(), points=points, crop=str(crop), mask=str(mask_path),
+                attributes={'color_scores':color_scores(rgb,mask)}, source='vlm_box_sam_depth'))
+        return results
+
     def detect(self, observation, output, categories=COMMON_CATEGORIES):
         rgb = observation['rgb']
         self.sam.set_image(rgb)
@@ -80,7 +109,7 @@ class GroundedSAM:
                 Image.fromarray(masked[ys.min():ys.max()+1, xs.min():xs.max()+1]).save(crop_path)
                 Image.fromarray(mask.astype('uint8')*255).save(mask_path)
                 results.append(dict(category=category, confidence=float(boxes['scores'][index]),
+                                    bbox=box.tolist(),
                                     points=points, crop=str(crop_path), mask=str(mask_path),
-                                    bbox_2d=[int(xs.min()), int(ys.min()), int(xs.max()+1), int(ys.max()+1)],
                                     attributes={'color_scores': color_scores(rgb, mask)}))
         return results

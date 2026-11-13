@@ -51,10 +51,26 @@ def request_json(policy, system, content):
             payload.update(enable_thinking=False, response_format={'type':'json_object'})
         url = policy.base+'/chat/completions'
     begin = time.perf_counter()
+    context = {}
+    if isinstance(content, list) and content and content[0].get('type') == 'text':
+        try:
+            context = json.loads(content[0]['text'])
+        except (ValueError, TypeError):
+            pass
+    if not isinstance(context, dict):
+        context = {}
+    callback = getattr(policy, 'request_callback', None)
+    def report(status, **extra):
+        if callback:
+            callback(dict(type='vlm_call', call=metric['call'], status=status,
+                          observation_id=context.get('observation_id'),
+                          candidate_id=context.get('candidate_id') or context.get('selected'),
+                          image_count=images, timestamp=time.time(), **extra))
     try:
         req = request.Request(url, data=json.dumps(payload).encode(), headers=headers)
         # Never route local images through the user's HTTP proxy.
         open_url = request.build_opener(request.ProxyHandler({})).open if urlparse(url).hostname in {'localhost','127.0.0.1','::1'} else request.urlopen
+        report('waiting')
         with open_url(req, timeout=policy.timeout) as response:
             packet = json.load(response)
         if policy.backend == 'ollama':
@@ -81,12 +97,15 @@ def request_json(policy, system, content):
         if not isinstance(result, dict):
             raise ValueError('VLM response must be a JSON object')
         metric['ok'] = True
+        report('returned', answer=result, elapsed_seconds=time.perf_counter()-begin)
         return result
     except error.HTTPError as exc:
         metric['error'] = 'HTTP '+str(exc.code)
+        report('error', error=metric['error'])
         raise RuntimeError('VLM HTTP %s; check model image support and configuration' % exc.code) from None
     except Exception as exc:
         metric['error'] = type(exc).__name__
+        report('error', error=metric['error'])
         raise
     finally:
         metric['wall_seconds'] = time.perf_counter()-begin

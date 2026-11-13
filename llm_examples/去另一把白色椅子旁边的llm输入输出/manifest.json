@@ -1,0 +1,12 @@
+{
+  "source_run": "/home/caosiqi/project/habitat_work/humanoid_nav_demo/outputs/web_visual_20261106_134206_398685",
+  "call": 7,
+  "files": {
+    "request_original.json": "a0247a59d6161a098b15f831da9b7bf2b680a816163cc4027f3e5faebb7b7ba1",
+    "response_original.json": "23fbf5892cc7e1a041a126d4f6aae49e55a5ff2cd6b9c34b3b4ae81205867292",
+    "images/01.jpg": "1d3809d4c4def4b49c427699f18fdf3cd3f213a35f9764b9f6f6bedfc0f7ef0f",
+    "images/02.jpg": "d637208adb0b4daa951630d2fe8a5d36e3656b8cf95e8b97aeb19c7dcd4c3a6c",
+    "images/03.jpg": "4daf5718b7575dba71420d9aa485872f27f52379b698a5974a6581cac0c0ccb7"
+  },
+  "image_count": 3
+}

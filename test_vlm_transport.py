@@ -48,6 +48,33 @@ class TransportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ollama_content([dict(type='image_url',image_url=dict(url='https://example.com/image.jpg'))])
 
+    def test_request_lifecycle_identifies_actual_frame(self):
+        events=[]
+        p=self.policy(None)
+        p.request_callback=events.append
+        content=[dict(type='text',text=json.dumps(dict(observation_id='o7',candidate_id='v0018'))),
+                 dict(type='image_url',image_url=dict(url='data:image/jpeg;base64,YQ=='))]
+        packet=dict(message=dict(content='{"approach_recommended":true}'),done_reason='stop')
+        with patch('visual_nav.transport.request.build_opener') as opener:
+            def response(*args, **kwargs):
+                self.assertEqual(events[-1]['status'],'waiting')
+                return io.BytesIO(json.dumps(packet).encode())
+            opener.return_value.open.side_effect=response
+            request_json(p,'rules',content)
+        self.assertEqual([e['status'] for e in events],['waiting','returned'])
+        self.assertEqual(events[0]['observation_id'],'o7')
+        self.assertEqual(events[0]['image_count'],1)
+        self.assertTrue(events[1]['answer']['approach_recommended'])
+
+    def test_request_error_is_reported(self):
+        events=[]
+        p=self.policy(None)
+        p.request_callback=events.append
+        with patch('visual_nav.transport.request.build_opener') as opener:
+            opener.return_value.open.side_effect=TimeoutError()
+            with self.assertRaises(TimeoutError): request_json(p,'rules','hello')
+        self.assertEqual([e['status'] for e in events],['waiting','error'])
+
     def test_preload_matches_context_and_reports_errors(self):
         from warmup_vlm import preload
         with patch('warmup_vlm.request.build_opener') as opener:

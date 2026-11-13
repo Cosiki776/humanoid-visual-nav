@@ -1,0 +1,25 @@
+[
+  {
+    "call": 7,
+    "backend": "openai",
+    "model": "qwen3.8-max",
+    "image_count": 3,
+    "phase": "decision",
+    "ok": true,
+    "usage": {
+      "completion_tokens": 180,
+      "completion_tokens_details": {
+        "text_tokens": 180
+      },
+      "prompt_tokens": 1149,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "image_tokens": 540,
+        "text_tokens": 609
+      },
+      "total_tokens": 1329
+    },
+    "finish_reason": "stop",
+    "wall_seconds": 4.220157256349921
+  }
+]

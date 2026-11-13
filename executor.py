@@ -67,6 +67,21 @@ class Executor:
         # Always publish the settled pose, including odd-numbered final steps.
         self.apply(force_frame=True)
 
+    def turn_to(self, direction, should_stop=None):
+        """Turn in place before directional translation; never curve around obstacles."""
+        direction=np.asarray(direction,dtype=float)
+        for _ in range(180):
+            if should_stop and should_stop():
+                self.stop()
+                return dict(status='cancelled')
+            forward=np.asarray(self.controller.prev_orientation,dtype=float)
+            if np.dot(forward,direction)/max(np.linalg.norm(forward)*np.linalg.norm(direction),1e-9)>.999:
+                return dict(status='succeeded')
+            self.controller.calculate_turn_pose(mn.Vector3(direction))
+            self.apply()
+        self.stop()
+        return dict(status='timeout',reason='turning did not converge')
+
     def execute_segment(self, endpoint, max_steps=600, should_stop=None, arrival_tolerance=0.08, on_step=None, settle=True):
         if not 0.005 <= arrival_tolerance <= 0.08:
             raise ValueError("arrival_tolerance must be 0.005..0.08 metres")

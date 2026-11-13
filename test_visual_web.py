@@ -7,6 +7,39 @@ from unittest.mock import patch, Mock
 from visual_web import VisualApp
 
 class VisualWebTests(unittest.TestCase):
+    def test_preview_initializes_once_and_preserves_existing_session(self):
+        app = VisualApp()
+        with tempfile.TemporaryDirectory() as tmp, patch('visual_web.bootstrap.ROOT', Path(tmp)), patch('visual_web.threading.Thread') as thread:
+            initial = app.initialize()
+            self.assertTrue(initial['busy'])
+            self.assertEqual(initial['phase'], 'loading')
+            app.initialize()
+            thread.assert_called_once()
+            app.busy = False
+            app.process = Mock()
+            app.jpeg = b'current pose'
+            app.initialize()
+            thread.assert_called_once()
+            self.assertEqual(app.jpeg, b'current pose')
+
+    def test_preview_response_is_not_a_completed_navigation_task(self):
+        import base64
+        import time
+        app = VisualApp()
+        app.process = Mock()
+        app.process.stdout = iter([
+            json.dumps(dict(type='observer_frame', jpeg=base64.b64encode(b'initial').decode()))+'\n',
+            json.dumps(dict(type='session_ready', position=[1, 0, 2]))+'\n'])
+        app.started = time.monotonic()
+        app.busy = True
+        with tempfile.TemporaryDirectory() as tmp:
+            app.worker(None, 0, Path(tmp)/'preview')
+        self.assertFalse(app.busy)
+        self.assertEqual(app.state['phase'], 'idle')
+        self.assertEqual(app.session_state['position'], [1, 0, 2])
+        self.assertEqual(app.jpeg, b'initial')
+        self.assertEqual(app.task_count, 0)
+
     def test_stop_preserves_owner_and_reset_is_explicit(self):
         app = VisualApp()
         with tempfile.TemporaryDirectory() as tmp, patch('visual_web.bootstrap.ROOT', Path(tmp)):

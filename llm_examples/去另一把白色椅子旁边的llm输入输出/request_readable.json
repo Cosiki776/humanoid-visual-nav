@@ -1,0 +1,33 @@
+{
+  "system": "核实黄色框候选，同时留意全图中更符合任务的物体。青色框为其他候选，框上ID与visible_candidates对应。类别标签不是事实。判断目标类别、主体颜色/属性是否符合；遮挡不等于类别错误，可以结合历史清晰图理解物体，但不能用历史图替代当前到达确认。光照、遮挡或画面不清时回答unknown，不猜测。无属性要求时attributes_match=yes。返回JSON：{\"candidate_id\":\"指定ID\",\"observation_id\":\"当前观测ID\",\"category_match\":\"yes|no|unknown\",\"attributes_match\":\"yes|no|unknown\",\"reason\":\"可见依据\", \"approach_recommended\":false, \"target_hint\":null}。如果能明确辨认类别或目标属性，值得靠近核实另一项，approach_recommended可为true，并说明具体依据；仅有模糊暗块、类别和属性都unknown时不要建议直接靠近；明确不符时不能建议靠近。如果别的框更明确符合目标，target_hint返回{\"candidate_id\":\"该框ID\",\"category_match\":\"yes\",\"attributes_match\":\"yes\",\"reason\":\"具体位置和可见依据\"}。不要只在reason里提到其他目标，要填写target_hint。只推荐当前可见且未excluded的ID，不得编造ID。",
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"observation_id\": \"obs_00014\", \"candidate_id\": \"v0018\", \"detected_category\": \"chair\", \"target_categories\": [\"chair\"], \"attributes\": [\"white\"], \"identity_state\": \"tentative\", \"visible_candidates\": [{\"id\": \"v0017\", \"detected_category\": \"chair\", \"bbox\": [159.72064208984375, 302.0284423828125, 230.26541137695312, 457.97760009765625], \"excluded\": false}, {\"id\": \"v0018\", \"detected_category\": \"chair\", \"bbox\": [705.606201171875, 252.0787353515625, 760.3946533203125, 290.5179443359375], \"excluded\": false}], \"excluded_previous_id\": \"v0001\"}"
+    },
+    {
+      "type": "text",
+      "text": "Current scene. Yellow box identifies candidate v0018; detected category: chair (detector hypothesis, verify visually)."
+    },
+    {
+      "type": "image_file",
+      "path": "images/01.jpg"
+    },
+    {
+      "type": "text",
+      "text": "Current candidate v0018 from obs_00014"
+    },
+    {
+      "type": "image_file",
+      "path": "images/02.jpg"
+    },
+    {
+      "type": "text",
+      "text": "Historical previous target v0001. Similar appearance alone does not establish identity."
+    },
+    {
+      "type": "image_file",
+      "path": "images/03.jpg"
+    }
+  ]
+}

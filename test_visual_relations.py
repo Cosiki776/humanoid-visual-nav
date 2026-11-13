@@ -72,8 +72,6 @@ class RelationTests(unittest.TestCase):
             memory.relations.edges[('v0001', 'near', 'v0002')]['secret_gt_table'] = 'DO_NOT_SEND'
             policy = VLMPolicy.__new__(VLMPolicy)
             policy.task = dict(target_categories=['chair'], reference_categories=['table'], relation='near')
-            memory.ledger.anchors['v0002'] = dict(verified=True, category='table')
-            memory.ledger.active_anchor_id = 'v0002'
             policy._request = Mock(return_value=dict(action='select', candidate_id='v0001'))
             policy.decide('去桌旁的椅子', observation, memory)
             system, content = policy._request.call_args.args
