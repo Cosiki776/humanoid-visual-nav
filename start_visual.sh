@@ -17,13 +17,13 @@ case "$mode" in
     export NAV_VLM_MODEL=qwen3.8:27b-q4_K_M
     export NAV_VLM_NUM_CTX=16384
     export NAV_VLM_TIMEOUT=300
-    /home/caosiqi/miniconda3/envs/habitat/bin/python warmup_vlm.py
+    /home/caosiqi/miniconda3/envs/habitat/bin/python -m scripts.utilities.warmup_vlm
     ;;
   cloud)
     export NAV_VLM_BACKEND=openai
     export NAV_VLM_MODEL=qwen3.8-max
     unset NAV_VLM_BASE_URL NAV_VLM_API_KEY NAV_VLM_TIMEOUT
-    # Cloud endpoint/key remain in the existing ignored model_config.json.
+    # Cloud endpoint/key remain in the existing ignored config/model_config.json.
     ;;
   *) echo 'Usage: bash start_visual.sh local|cloud [serve.py arguments]' >&2; exit 2 ;;
 esac

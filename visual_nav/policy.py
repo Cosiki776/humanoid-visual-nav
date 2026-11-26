@@ -47,7 +47,7 @@ def _validate_decision(decision, candidates, current_id, seen, selected, at_goal
 
 class VLMPolicy:
     def __init__(self):
-        from model_settings import load_model_settings
+        from app.model_settings import load_model_settings
         config = load_model_settings()
         self.base = os.environ.get('NAV_VLM_BASE_URL', config['base_url']).rstrip('/')
         self.model = os.environ.get('NAV_VLM_MODEL', '')

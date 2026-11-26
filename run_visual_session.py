@@ -136,7 +136,7 @@ def main():
                                         status=result['status'], selected=result.get('selected'),
                                         verified=result.get('verified', False), start_position=result.get('start_position'),
                                         final_position=simulator.position.tolist() if simulator else None))
-                    save_json(args.session_dir/'session.json', dict(session_id=args.session_dir.name,
+                    save_json(args.session_dir/'legacy_gt.session.json', dict(session_id=args.session_dir.name,
                         scene=args.scene, tasks=history, previous_verified_goal=previous_goal,
                         position=simulator.position.tolist() if simulator else None,
                         yaw=simulator.yaw if simulator else None, observation_counter=simulator.counter if simulator else 0,

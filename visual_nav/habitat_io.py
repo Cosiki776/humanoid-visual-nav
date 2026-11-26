@@ -14,8 +14,8 @@ from .docking import arrival_geometry, boundary_samples, PREFERRED_GAP
 
 class HabitatIO:
     def __init__(self, scene, output, seed=7, start=None, frame_callback=None, realtime=False):
-        from world import World
-        from executor import Executor
+        from simulation.world import World
+        from simulation.executor import Executor
         class GeometryWorld(World):
             def objects(self, *args, **kwargs):
                 raise PermissionError('GT object access is forbidden in visual mode')

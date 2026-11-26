@@ -1,14 +1,42 @@
-新版 P1–P4（身份与搜索、视图记忆、关系观察、异步执行）：见 [NAV_IMPROVEMENTS.md](NAV_IMPROVEMENTS.md)。
+# 目录与入口
+
+下列命令均在项目根目录 `humanoid_nav_demo/` 执行。
+
+```text
+run_visual.py / run_visual_session.py   单次导航 / 连续会话
+serve.py / start_visual.sh              网页与启动入口
+visual_nav/                            视觉导航实现
+simulation/                            Habitat 仿真执行
+legacy_gt/                                旧 旧 GT 入口、规划、会话及网页
+app/                                   网页后端与模型配置读取
+web/                                   HTML 页面
+config/                                模型配置、标注和评测配置示例
+requirements/                          依赖清单
+tests/                                 离线测试
+scripts/checks/                        实景、服务与历史帧检查
+scripts/evaluation/                    评测、基线及对照实验
+scripts/utilities/                     模型预热、示例导出和预览
+docs/                                  设计说明与验证记录
+outputs/                               运行结果（忽略提交）
+```
+
+运行离线测试：`python -m unittest discover -s tests -t .`。
+辅助脚本使用模块方式，例如 `python -m scripts.evaluation.run_visual_benchmark --help`。
+根目录只保留常用启动入口、依赖初始化 `bootstrap.py` 和项目说明。
+本地模型配置已迁移到 `config/model_config.json`，仍被 Git 忽略。
+详见 [文档索引](docs/README.md) 和 [脚本索引](scripts/README.md)。
+
+新版 P1–P4（身份与搜索、视图记忆、关系观察、异步执行）：见 [NAV_IMPROVEMENTS.md](docs/NAV_IMPROVEMENTS.md)。
 
 # ReplicaCAD GT → 路线规划 → Habitat 人形行走
 
-新增独立的 **RGB-D 视觉导航第一版**：启动、模型切换、GT 权限审计和四组评测见 [VISUAL_NAV.md](VISUAL_NAV.md)。
+新增独立的 **RGB-D 视觉导航第一版**：启动、模型切换、GT 权限审计和四组评测见 [VISUAL_NAV.md](docs/VISUAL_NAV.md)。
 CLI 入口为 `run_visual.py`。`serve.py` 现在默认打开视觉工作台；GT 基线位于 `/gt`，也可用 `serve.py --mode gt` 单独启动。
 
 视觉网页：在项目目录运行 `/home/caosiqi/miniconda3/envs/habitat/bin/python serve.py --port 8770`，打开 http://127.0.0.1:8770 。支持指令执行、停止、第三人称实时运动、第一人称关键帧、候选证据和历史记录。
 视觉页支持连续会话：后续指令从当前位置继续，保留视觉记忆并复用模型；“停止”保留现场，“新建会话”才重置。记录保存至 `outputs/visual_session_*/session.json`，页面刷新不影响会话；服务重启暂不自动恢复仿真状态。
 下文旧流程说明仍针对 GT 基线。
-实测结果与已知局限见 [VISUAL_VALIDATION.md](VISUAL_VALIDATION.md)。
+实测结果与已知局限见 [VISUAL_VALIDATION.md](docs/VISUAL_VALIDATION.md)。
 
 第一版使用静态 `apt_0`、全局 GT 和 Habitat 的 `KinematicHumanoid`。
 这是运动学角色演示，不是动力学机器人平衡控制，也不是视觉导航结果。
@@ -30,7 +58,7 @@ CLI 入口为 `run_visual.py`。`serve.py` 现在默认打开视觉工作台；G
 
 网页新增可折叠“执行过程”，展示模型请求等待时间、输入字符数、路线、校验失败和行走结果；
 不展示模型内部思维链。请求 JSON 去除多余空格，但不承诺解决模型自身的超时。
-修改后需要重启服务并刷新网页。`check_workflow.py --agent` 现验收单目标自然语言导航。
+修改后需要重启服务并刷新网页。`scripts/checks/check_workflow.py --agent` 现验收单目标自然语言导航。
 
 ## 多步骤任务（历史设计；目前仅离线模式启用）
 
@@ -64,7 +92,7 @@ CLI 入口为 `run_visual.py`。`serve.py` 现在默认打开视觉工作台；G
 完整结果仍写入 `outputs/session_*/turn_*.json`。
 
 当前 Habitat Python 为 3.9，使用兼容的 LangGraph **0.6.11**；1.x 需要 Python 3.10+。
-依赖放在 `graph_vendor/`，版本见 `requirements-graph.txt`，不修改已有 conda 环境。
+依赖放在 `graph_vendor/`，版本见 `requirements/graph.txt`，不修改已有 conda 环境。
 以后迁移 1.x 时可升级运行环境或把规划与仿真拆成两个进程。
 
 本轮未实现：环绕多圈、禁行区域等约束、抓取、坐下、左/右等相对位置目标。
@@ -74,14 +102,14 @@ CLI 入口为 `run_visual.py`。`serve.py` 现在默认打开视觉工作台；G
 测试正在运行的新服务（会实际移动机器人，`--agent` 还会调用所配置的模型）：
 
 ```bash
-/home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/check_workflow.py --url http://127.0.0.1:8767
-/home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/check_workflow.py --url http://127.0.0.1:8767 --agent
+/home/caosiqi/miniconda3/envs/habitat/bin/python -m scripts.checks.check_workflow --url http://127.0.0.1:8767
+/home/caosiqi/miniconda3/envs/habitat/bin/python -m scripts.checks.check_workflow --url http://127.0.0.1:8767 --agent
 ```
 
 若模型请求报 TLS EOF，而直连阿里云正常，可仅为该域名绕过环境代理启动服务：
 
 ```bash
-NO_PROXY=dashscope.aliyuncs.com,127.0.0.1,localhost no_proxy=dashscope.aliyuncs.com,127.0.0.1,localhost /home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/serve.py --mode gt --port 8767
+NO_PROXY=dashscope.aliyuncs.com,127.0.0.1,localhost no_proxy=dashscope.aliyuncs.com,127.0.0.1,localhost /home/caosiqi/miniconda3/envs/habitat/bin/python serve.py --mode gt --port 8767
 ```
 
 本机浏览器访问 `http://127.0.0.1:8767`；远程使用时需转发 8767 端口。
@@ -94,7 +122,7 @@ NO_PROXY=dashscope.aliyuncs.com,127.0.0.1,localhost no_proxy=dashscope.aliyuncs.
 
 ### 浏览器实时画面与持续会话（推荐）
 
-打开本目录的 `model_config.json`，在 `api_key` 的双引号内填入自己的百炼 API Key：
+打开本目录的 `config/model_config.json`，在 `api_key` 的双引号内填入自己的百炼 API Key：
 
 ```json
 {
@@ -111,14 +139,14 @@ NO_PROXY=dashscope.aliyuncs.com,127.0.0.1,localhost no_proxy=dashscope.aliyuncs.
 [阿里云 Base URL 文档](https://help.aliyun.com/zh/model-studio/base-url)、
 [Qwen3.8-Max 模型 ID](https://help.aliyun.com/zh/model-studio/qwen3-8-max)。
 
-`model_config.json` 已加入 Git 忽略规则，不会通过本网页提供下载；
-无密钥模板为 `model_config.example.json`。程序按脚本所在目录找配置，与终端当前目录无关。
+`config/model_config.json` 已加入 Git 忽略规则，不会通过本网页提供下载；
+无密钥模板为 `config/model_config.example.json`。程序按脚本所在目录找配置，与终端当前目录无关。
 原有 `NAV_LLM_BASE_URL`、`NAV_LLM_MODEL`、`NAV_LLM_API_KEY` 环境变量仍兼容，**环境变量优先**；
 若之前设置过它们且希望使用文件配置，先执行：
 
 ```bash
 unset NAV_LLM_BASE_URL NAV_LLM_MODEL NAV_LLM_API_KEY
-/home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/serve.py --mode gt --port 8765
+/home/caosiqi/miniconda3/envs/habitat/bin/python serve.py --mode gt --port 8765
 ```
 
 浏览器访问 **http://127.0.0.1:8765**。不配置模型也能启动，展开页面的“离线目标测试”即可选择家具并连续执行。
@@ -147,9 +175,9 @@ HTTP 接口：`GET /api/status`、`GET /stream.mjpg`、`GET /api/frame.jpg`；
 对运行中的服务做两条真实导航任务的连续性验证（会移动机器人）：
 
 ```bash
-/home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/check_live.py
+/home/caosiqi/miniconda3/envs/habitat/bin/python -m scripts.checks.check_live
 # 同时验证停止当前任务、清空排队任务：
-/home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/check_live.py --check-stop
+/home/caosiqi/miniconda3/envs/habitat/bin/python -m scripts.checks.check_live --check-stop
 ```
 
 本机已通过 HTTP、JPEG、MJPEG 及两条顺序任务的实际仿真验证，第二条起点与第一条终点完全一致。
@@ -162,13 +190,13 @@ HTTP 接口：`GET /api/status`、`GET /stream.mjpg`、`GET /api/frame.jpg`；
 
 ```bash
 # 只导出场景对象、目标站立点、路标及连接。
-/home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/run.py --mode export
+/home/caosiqi/miniconda3/envs/habitat/bin/python -m legacy_gt.run --mode export
 
 # 离线执行验证：BFS 选路线，人形逐段执行。不调用模型、不声称是 agent 规划。
-/home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/run.py --mode smoke
+/home/caosiqi/miniconda3/envs/habitat/bin/python -m legacy_gt.run --mode smoke
 
 # 验证规划输出边界，无需 GPU 或模型服务。
-/home/caosiqi/miniconda3/envs/habitat/bin/python -m unittest discover -s humanoid_nav_demo -p 'test_*.py'
+/home/caosiqi/miniconda3/envs/habitat/bin/python -m unittest discover -s tests -t . -p 'test_*.py'
 ```
 
 渲染需要 GPU/EGL 可访问；受限沙箱中可能提示 `no EGL devices found`。
@@ -199,7 +227,7 @@ HTTP 接口：`GET /api/status`、`GET /stream.mjpg`、`GET /api/frame.jpg`；
 export NAV_LLM_BASE_URL='http://127.0.0.1:8000/v1'
 export NAV_LLM_MODEL='你的模型名称'
 # 需要认证时，在本地环境变量设置 NAV_LLM_API_KEY，勿提交密钥。
-/home/caosiqi/miniconda3/envs/habitat/bin/python humanoid_nav_demo/run.py \
+/home/caosiqi/miniconda3/envs/habitat/bin/python -m legacy_gt.run \
   --mode agent --instruction '走到最近的一把椅子旁边'
 ```
 
@@ -211,7 +239,7 @@ export NAV_LLM_MODEL='你的模型名称'
 当前 CLI 尚未实现交互追问续跑。网络错误会明确报错，不自动切换成假模型或 BFS。
 浏览器版 `serve.py` 已支持持续会话和接着回答澄清问题。
 
-颜色不从 semantic_id 推断。`annotations.json` 初始为空；看过资产后可人工补充：
+颜色不从 semantic_id 推断。`legacy_gt/annotations.json` 初始为空；看过资产后可人工补充：
 
 ```json
 {
@@ -227,10 +255,10 @@ export NAV_LLM_MODEL='你的模型名称'
 - `world.py`：读取加载后的刚体状态及语义词典，变换包围盒到世界坐标，按身体半径重建 NavMesh，生成直连路标图。
 - `planning.py`：模型规划接口、路线结构和连接校验，以及明确区分的离线 BFS 测试基线。
 - `executor.py`：复用 Habitat-Lab 官方行走控制器，逐帧校验根部移动并跟踪指定路段，不计算绕路。
-- `run.py`：有限次数的规划、执行、反馈循环，保存视频和日志。
+- `legacy_gt/run.py`：有限次数的规划、执行、反馈循环，保存视频和日志。
 - `session.py`：持续会话、历史上下文、从实际位置连接路标图、单次失败隔离。
 - `task_graph.py`：LangGraph 多步骤任务、步骤校验、保存起点、返回与顺序执行。
-- `serve.py` / `web.html`：本地 HTTP 服务、MJPEG 视频流、浏览器指令队列与停止控制。所有仿真操作只在同一个工作线程运行。
+- `serve.py` / `legacy_gt/web.html`：本地 HTTP 服务、MJPEG 视频流、浏览器指令队列与停止控制。所有仿真操作只在同一个工作线程运行。
 
 以后换 nanobot/Harness：调用这些普通 Python 接口或加 HTTP/MCP 包装即可。
 以后接视觉：替换对象信息来源；若连全局 GT 地图也移除，还需接建图与机器人定位。
