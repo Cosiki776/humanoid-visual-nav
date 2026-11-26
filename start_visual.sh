@@ -2,6 +2,7 @@
 set -euo pipefail
 cd -- "$(dirname -- "$0")"
 mode="${1:-local}"
+python_bin="${PYTHON:-python}"
 if [[ $# -gt 0 ]]; then shift; fi
 # This affects only the simulator/perception process, not the existing Ollama server.
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
@@ -14,10 +15,10 @@ case "$mode" in
     export NAV_VLM_BACKEND=ollama
     export NAV_VLM_BASE_URL=http://127.0.0.1:11434
     export NAV_VLM_API_KEY=''
-    export NAV_VLM_MODEL=qwen3.8:27b-q4_K_M
-    export NAV_VLM_NUM_CTX=16384
-    export NAV_VLM_TIMEOUT=300
-    /home/caosiqi/miniconda3/envs/habitat/bin/python -m scripts.utilities.warmup_vlm
+    export NAV_VLM_MODEL="${NAV_VLM_MODEL:-qwen3.8:27b-q4_K_M}"
+    export NAV_VLM_NUM_CTX="${NAV_VLM_NUM_CTX:-16384}"
+    export NAV_VLM_TIMEOUT="${NAV_VLM_TIMEOUT:-300}"
+    "$python_bin" -m scripts.utilities.warmup_vlm
     ;;
   cloud)
     export NAV_VLM_BACKEND=openai
@@ -27,4 +28,4 @@ case "$mode" in
     ;;
   *) echo 'Usage: bash start_visual.sh local|cloud [serve.py arguments]' >&2; exit 2 ;;
 esac
-exec /home/caosiqi/miniconda3/envs/habitat/bin/python serve.py --port 8770 "$@"
+exec "$python_bin" serve.py --port 8770 "$@"

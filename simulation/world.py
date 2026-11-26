@@ -14,7 +14,7 @@ def vector(value):
 
 class World:
     def __init__(self, scene="apt_0", radius=0.3, seed=7, rgbd=False):
-        self.data = bootstrap.WORKSPACE / "data" / "replica_cad"
+        self.data = bootstrap.DATA / "replica_cad"
         cfg = habitat_sim.SimulatorConfiguration()
         cfg.scene_dataset_config_file = str(self.data / "replicaCAD.scene_dataset_config.json")
         cfg.scene_id = scene

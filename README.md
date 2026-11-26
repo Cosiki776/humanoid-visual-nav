@@ -1,291 +1,303 @@
-# 目录与入口
+# Humanoid Visual Navigation
 
-下列命令均在项目根目录 `humanoid_nav_demo/` 执行。
+基于 Habitat 的人形视觉导航实验系统。系统在 ReplicaCAD 场景中运行运动学人形角色，使用 RGB-D 观察、开放词汇检测/分割、视图记忆、主动搜索和到达核验完成自然语言导航，并提供浏览器工作台。
 
-```text
-run_visual.py / run_visual_session.py   单次导航 / 连续会话
-serve.py / start_visual.sh              网页与启动入口
-visual_nav/                            视觉导航实现
-simulation/                            Habitat 仿真执行
-legacy_gt/                                旧 旧 GT 入口、规划、会话及网页
-app/                                   网页后端与模型配置读取
-web/                                   HTML 页面
-config/                                模型配置、标注和评测配置示例
-requirements/                          依赖清单
-tests/                                 离线测试
-scripts/checks/                        实景、服务与历史帧检查
-scripts/evaluation/                    评测、基线及对照实验
-scripts/utilities/                     模型预热、示例导出和预览
-docs/                                  设计说明与验证记录
-outputs/                               运行结果（忽略提交）
-```
+> 本仓库不是开箱即用的独立仿真包。代码可以从 GitHub 获取，但 **Habitat-Sim、Habitat-Lab、ReplicaCAD、人形资产和视觉模型权重需要另外安装或下载**。它们体积较大或受各自许可证约束，因此没有提交到本仓库。
 
-运行离线测试：`python -m unittest discover -s tests -t .`。
-辅助脚本使用模块方式，例如 `python -m scripts.evaluation.run_visual_benchmark --help`。
-根目录只保留常用启动入口、依赖初始化 `bootstrap.py` 和项目说明。
-本地模型配置已迁移到 `config/model_config.json`，仍被 Git 忽略。
-详见 [文档索引](docs/README.md) 和 [脚本索引](scripts/README.md)。
+## 功能与边界
 
-新版 P1–P4（身份与搜索、视图记忆、关系观察、异步执行）：见 [NAV_IMPROVEMENTS.md](docs/NAV_IMPROVEMENTS.md)。
+- 浏览器中的连续视觉导航会话和实时画面
+- 本地 Ollama VLM 或 OpenAI-compatible 云端 VLM
+- RGB-D 观察、目标实例记忆、主动补视角和几何到达核验
+- Habitat `KinematicHumanoid` 路径执行
+- GT 基线、离线测试和评测脚本
 
-# ReplicaCAD GT → 路线规划 → Habitat 人形行走
+当前系统是仿真研究原型，不是动力学平衡控制器，也没有真实机器人部署接口。默认场景为 ReplicaCAD `apt_0`；当前主流程并不使用 HM3D，所以复现默认演示 **不需要下载 HM3D**。
 
-新增独立的 **RGB-D 视觉导航第一版**：启动、模型切换、GT 权限审计和四组评测见 [VISUAL_NAV.md](docs/VISUAL_NAV.md)。
-CLI 入口为 `run_visual.py`。`serve.py` 现在默认打开视觉工作台；GT 基线位于 `/gt`，也可用 `serve.py --mode gt` 单独启动。
+## 已验证环境
 
-视觉网页：在项目目录运行 `/home/caosiqi/miniconda3/envs/habitat/bin/python serve.py --port 8770`，打开 http://127.0.0.1:8770 。支持指令执行、停止、第三人称实时运动、第一人称关键帧、候选证据和历史记录。
-视觉页支持连续会话：后续指令从当前位置继续，保留视觉记忆并复用模型；“停止”保留现场，“新建会话”才重置。记录保存至 `outputs/visual_session_*/session.json`，页面刷新不影响会话；服务重启暂不自动恢复仿真状态。
-下文旧流程说明仍针对 GT 基线。
-实测结果与已知局限见 [VISUAL_VALIDATION.md](docs/VISUAL_VALIDATION.md)。
+以下组合是本项目当前实际使用并验证过的基线：
 
-第一版使用静态 `apt_0`、全局 GT 和 Habitat 的 `KinematicHumanoid`。
-这是运动学角色演示，不是动力学机器人平衡控制，也不是视觉导航结果。
-所有新增代码、依赖和输出在本目录，复用上级目录的 ReplicaCAD 和 Habitat-Lab 源码。
+| 组件 | 版本 |
+| --- | --- |
+| OS | Linux x86_64 |
+| Python | 3.9.19 |
+| Habitat-Sim | 0.3.3，启用 Bullet；服务器建议 headless/EGL |
+| Habitat-Lab | `stable`，本机提交 `0fb6f43ff` |
+| NumPy | 1.26.4 |
+| PyTorch / Torchvision | 2.0.1 / 0.15.2 |
+| CUDA（本机 PyTorch 构建） | 11.7 |
 
-## 当前模式：自然语言单目标，离线多目标保留
+其他版本可能可用，但未经过本项目完整验证。渲染模式需要 Linux GPU 和可用的 EGL；仅运行不导入 Habitat 的单元测试不需要 GPU。
 
-模型请求现使用 Chat Completions SSE 流式响应：分别接收 `reasoning_content` 和 `content`。
-阿里云 Qwen 请求开启 `enable_thinking`。网页在对话下方展示接口公开返回的推理文本及最终输出，
-仍通过现有状态轮询约每 0.7 秒更新，并非浏览器逐 token SSE 推送。不提供推理字段的模型会明确提示。
-仅完整正常结束的最终输出会解析、校验并执行；断流、长度截断不会执行半截路线。
-展示仅保留本次请求最近 60000 字符，下一次请求会清空；推理文本不写入执行日志或后续模型历史。
-流式不保证更快；超时仍为网络读取超时，持续收到数据的长推理可能超过该时长。
+## 1. 克隆代码并创建环境
 
-自然语言现在直接调用路线模型，不再调用任务拆解模型。每条指令只导航到一个物体；
-完成后可继续输入下一条。明显的串联指令本地拒绝，其他复合语义由同一次路线模型调用判断，
-返回 unsupported，不允许只执行其中一部分。自然语言识别仍有模型误判风险。
-离线“两目标 + 返回”、暂停/继续、替换任务及 LangGraph 步骤执行保持不变。
-
-网页新增可折叠“执行过程”，展示模型请求等待时间、输入字符数、路线、校验失败和行走结果；
-不展示模型内部思维链。请求 JSON 去除多余空格，但不承诺解决模型自身的超时。
-修改后需要重启服务并刷新网页。`scripts/checks/check_workflow.py --agent` 现验收单目标自然语言导航。
-
-## 多步骤任务（历史设计；目前仅离线模式启用）
-
-浏览器服务现已使用 LangGraph 管理步骤选择、执行结果、进度推进和步骤间检查点。
-以下为原自然语言多任务设计记录，当前不再开放串联/返回指令；暂停和替换仍可使用：
-
-- “先去沙发旁边，再去最近的桌子旁边，最后回来。”
-- “回到会话开始的位置。”
-- 执行时输入“暂停”“继续”“停止”，或使用相应按钮。
-- “改成去沙发旁边”，或勾选“替换当前任务”后发送新指令。
-
-“回来”默认返回**当前这条指令开始时的位置**；“会话开始的位置”是服务加载角色时的位置。
-多个目标逐步规划，最近目标按该步骤开始时的位置判断。最多 8 个步骤，单步骤无效路线最多重规划两次。
-网页显示完整任务列表、已完成步骤和当前路线。离线测试也支持“两目标 + 返回”。
-普通新指令仍排队；替换会取消旧任务及其等待队列，从停止后的实际位置开始新任务。
-暂停保留当前路线和剩余步骤；停止/取消会放弃剩余步骤。模型调用期间的暂停、取消要等待当前请求返回或超时。
-控制短语为明确的“暂停/暂停一下/先暂停”“继续/继续执行/恢复”“停止/停下/取消”；
-“改成/换成/改去/换去”开头按替换处理，其他自然语言修改建议使用“替换”勾选框。
-
-结构与线程约束：
-
-```text
-模型拆解步骤 → LangGraph select_step → execute 边界暂停
-                                      ↓ 主线程拥有者执行 Habitat 导航
-                                写回执行结果 → advance → 下一步 / 结束
-```
-
-`execute` 使用 LangGraph `interrupt_before` + `update_state(as_node="execute")`。
-实际 Habitat 操作留在仿真拥有线程，避免跨线程 OpenGL 崩溃。图检查点为每条任务独立的内存存储；
-行走中暂停由逐帧控制门实现。它支持本次进程内暂停/继续，不支持崩溃或进程重启后的仿真状态恢复。
-完整结果仍写入 `outputs/session_*/turn_*.json`。
-
-当前 Habitat Python 为 3.9，使用兼容的 LangGraph **0.6.11**；1.x 需要 Python 3.10+。
-依赖放在 `graph_vendor/`，版本见 `requirements/graph.txt`，不修改已有 conda 环境。
-以后迁移 1.x 时可升级运行环境或把规划与仿真拆成两个进程。
-
-本轮未实现：环绕多圈、禁行区域等约束、抓取、坐下、左/右等相对位置目标。
-任务拆解提示词要求对不支持的任务明确返回 unsupported，不把它简化成普通导航；
-自然语言是否被完整理解仍需要结合测试评估。
-
-测试正在运行的新服务（会实际移动机器人，`--agent` 还会调用所配置的模型）：
+建议让项目、Habitat-Lab 和数据目录互相独立，不要把 Conda 环境或场景数据复制进本仓库。
 
 ```bash
-/home/caosiqi/miniconda3/envs/habitat/bin/python -m scripts.checks.check_workflow --url http://127.0.0.1:8767
-/home/caosiqi/miniconda3/envs/habitat/bin/python -m scripts.checks.check_workflow --url http://127.0.0.1:8767 --agent
+git clone https://github.com/Cosiki776/humanoid-visual-nav.git
+cd humanoid-visual-nav
+
+conda create -n humanoid-nav python=3.9 -y
+conda activate humanoid-nav
 ```
 
-若模型请求报 TLS EOF，而直连阿里云正常，可仅为该域名绕过环境代理启动服务：
+安装带 Bullet 的 Habitat-Sim。远程服务器通常使用 headless/EGL 版本：
 
 ```bash
-NO_PROXY=dashscope.aliyuncs.com,127.0.0.1,localhost no_proxy=dashscope.aliyuncs.com,127.0.0.1,localhost /home/caosiqi/miniconda3/envs/habitat/bin/python serve.py --mode gt --port 8767
+conda install habitat-sim=0.3.3 withbullet headless \
+  -c conda-forge -c aihabitat -y
 ```
 
-本机浏览器访问 `http://127.0.0.1:8767`；远程使用时需转发 8767 端口。
+有桌面显示环境时，可以去掉 `headless`。安装后检查：
 
-本轮验证：19 项单元测试通过；真实仿真离线三步任务、暂停/继续、中途替换通过，返回起点误差约 0.061 m。
-真实 Qwen 请求已成功拆解三步任务并执行第一步；第二步受阻后的重新规划请求超时，任务安全结束，
-因此尚未通过真实模型三步任务的完整验收。不要把离线通过等同于自然语言全链路稳定。
+```bash
+python -c "import habitat_sim; print(habitat_sim.__version__)"
+```
 
-## 运行
+Habitat-Sim 官方安装说明：<https://github.com/facebookresearch/habitat-sim#installation>。
 
-### 浏览器实时画面与持续会话（推荐）
+## 2. 安装 Habitat-Lab
 
-打开本目录的 `config/model_config.json`，在 `api_key` 的双引号内填入自己的百炼 API Key：
+人形控制器来自 Habitat-Lab，因此只安装 Habitat-Sim 不够。推荐克隆 `stable` 分支并以 editable 模式安装：
+
+```bash
+git clone --branch stable https://github.com/facebookresearch/habitat-lab.git ../habitat-lab
+python -m pip install -e ../habitat-lab/habitat-lab
+```
+
+如果 Habitat-Lab 位于其他位置，启动前指定：
+
+```bash
+export HABITAT_LAB_PATH=/absolute/path/to/habitat-lab/habitat-lab
+```
+
+## 3. 安装项目依赖
+
+视觉模式使用 PyTorch、Transformers、Segment Anything 等依赖：
+
+```bash
+python -m pip install -r requirements/visual.txt
+python -m pip install -r requirements/graph.txt
+```
+
+`requirements/visual.txt` 记录的是已验证版本。若机器已有与 CUDA 匹配的 PyTorch，请保留该 PyTorch，并单独安装其余包，避免 `pip` 覆盖可工作的 CUDA 构建。
+
+## 4. 下载 ReplicaCAD 场景
+
+默认演示使用 ReplicaCAD，而不是 HM3D。按照 Habitat 官方数据说明下载 ReplicaCAD：
+
+```bash
+python -m habitat_sim.utils.datasets_download \
+  --uids replica_cad_dataset \
+  --data-path ../data
+```
+
+项目默认期望下面的文件存在：
+
+```text
+../data/replica_cad/replicaCAD.scene_dataset_config.json
+```
+
+如果数据放在别处，设置数据根目录（该目录下应有 `replica_cad/`）：
+
+```bash
+export HABITAT_DATA_PATH=/absolute/path/to/data
+```
+
+ReplicaCAD 的下载、目录结构和许可证以 Habitat-Lab 官方说明为准：<https://github.com/facebookresearch/habitat-lab/blob/main/DATASETS.md>。
+
+## 5. 下载人形资产
+
+运行导航必须具备 `female_0` 的 URDF、GLB、动作数据和配置文件。资产来自官方数据集：
+<https://huggingface.co/datasets/ai-habitat/habitat_humanoids>。
+
+将以下文件放入 `assets/female_0/`：
+
+```text
+assets/female_0/
+├── female_0.ao_config.json
+├── female_0.glb
+├── female_0.urdf
+└── female_0_motion_data_smplx.pkl
+```
+
+也可以把资产放在仓库外，并设置：
+
+```bash
+export NAV_HUMANOID_ASSETS=/absolute/path/to/female_0
+```
+
+这些资产不会被 Git 上传；使用时请遵循上游许可证。动作文件是 pickle，只应从可信的官方来源加载。
+
+## 6. 下载视觉权重
+
+完整视觉流程默认需要 Segment Anything ViT-B checkpoint：
+
+```text
+weights/
+└── sam_vit_b_01ec64.pth
+```
+
+- `sam_vit_b_01ec64.pth`：Segment Anything ViT-B checkpoint
+
+Grounding DINO 默认模型为 `IDEA-Research/grounding-dino-tiny`，由 Transformers/Hugging Face 在首次使用时下载并缓存；离线服务器应提前准备该模型缓存，或通过 `--dino-model` 指向本地模型目录。
+
+项目默认从相邻目录 `../weights/` 读取。权重在其他位置时设置：
+
+```bash
+export NAV_WEIGHTS_PATH=/absolute/path/to/weights
+```
+
+模型权重没有提交到本仓库。只运行纯逻辑单元测试或部分 GT 基线时不需要这些权重。
+
+## 7. 配置视觉语言模型
+
+### 方案 A：云端 OpenAI-compatible API
+
+复制示例配置：
+
+```bash
+cp config/model_config.example.json config/model_config.json
+```
+
+编辑 `config/model_config.json`：
 
 ```json
 {
   "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "model": "qwen3.8-max",
-  "api_key": "在这里填写你的 API Key",
+  "api_key": "YOUR_API_KEY",
   "timeout_seconds": 120
 }
 ```
 
-默认地址是**北京地域、按量付费**的兼容接口；Key 必须与地域及计费方案对应。
-新加坡地址为 `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`。
-其他地域、业务空间专属地址或套餐地址以控制台提供的 OpenAI 兼容 Base URL 为准：
-[阿里云 Base URL 文档](https://help.aliyun.com/zh/model-studio/base-url)、
-[Qwen3.8-Max 模型 ID](https://help.aliyun.com/zh/model-studio/qwen3-8-max)。
-
-`config/model_config.json` 已加入 Git 忽略规则，不会通过本网页提供下载；
-无密钥模板为 `config/model_config.example.json`。程序按脚本所在目录找配置，与终端当前目录无关。
-原有 `NAV_LLM_BASE_URL`、`NAV_LLM_MODEL`、`NAV_LLM_API_KEY` 环境变量仍兼容，**环境变量优先**；
-若之前设置过它们且希望使用文件配置，先执行：
+`config/model_config.json` 已被 `.gitignore` 排除。不要提交 API Key。也可以使用环境变量，且环境变量优先：
 
 ```bash
-unset NAV_LLM_BASE_URL NAV_LLM_MODEL NAV_LLM_API_KEY
-/home/caosiqi/miniconda3/envs/habitat/bin/python serve.py --mode gt --port 8765
+export NAV_LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+export NAV_LLM_MODEL=qwen3.8-max
+export NAV_LLM_API_KEY=YOUR_API_KEY
 ```
 
-浏览器访问 **http://127.0.0.1:8765**。不配置模型也能启动，展开页面的“离线目标测试”即可选择家具并连续执行。
-页面不会收集或返回 API Key，模型配置在服务启动时读取；填写或修改配置后需要重启服务。
-如果旧服务仍占用 8765，先在其启动终端按 Ctrl+C；也可用 `--port 8766` 启动并访问新端口。
-如果在远程服务器运行，在 VS Code 的“端口 / Ports”面板转发 **8765**，再打开转发后的本地网址；
-也可以用 `ssh -L 8765:127.0.0.1:8765 用户名@服务器地址` 建立端口转发。
-默认绑定本机，当前是单用户共享会话，没有账户隔离。
+### 方案 B：本地 Ollama
 
-会话行为：
-
-- 同一个场景与人形角色只加载一次。第一条完成后，下一条从**实际当前位置**继续，不重置机器人。
-- 保存最近 40 条用户 / 助手记录，模型会收到上次目标、执行结果和位置；支持接着回答模型的澄清问题。
-- 多条指令依次排队（最多等待 8 条）；刷新网页会重新取得已有会话状态。
-- “停止”会取消当前任务并清空等待队列；行走时逐帧检查停止信号。模型请求中的取消在响应返回或超时后生效。
-- 当前是导航任务会话，不是任意聊天助手；历史超出窗口会裁掉，进程重启不会自动恢复场景状态。
-- `outputs/session_<时间>/turn_0001.json` 等记录每轮起点、终点、路线和执行结果。
-- 页面默认逐张请求最新 JPEG（约 10 帧/秒，具体受网络影响），避免端口转发缓冲 MJPEG 长连接。
-  MJPEG 接口仍可直接访问；仿真按 30 Hz 节奏执行，每两步生成一帧。空闲或等待模型时显示最后一帧。
-- 页面显示服务端帧计数、实际坐标和上次起终点位移；镜头跟随人形角色，因此人物在画面中的位置可能变化不大。
-
-HTTP 接口：`GET /api/status`、`GET /stream.mjpg`、`GET /api/frame.jpg`；
-`POST /api/command` 接收 `{"instruction":"走到最近的椅子旁边"}`，
-或离线测试用的 `{"target":"真实对象ID"}`；`POST /api/stop` 接收 `{}`。
-
-对运行中的服务做两条真实导航任务的连续性验证（会移动机器人）：
-
-```bash
-/home/caosiqi/miniconda3/envs/habitat/bin/python -m scripts.checks.check_live
-# 同时验证停止当前任务、清空排队任务：
-/home/caosiqi/miniconda3/envs/habitat/bin/python -m scripts.checks.check_live --check-stop
-```
-
-本机已通过 HTTP、JPEG、MJPEG 及两条顺序任务的实际仿真验证，第二条起点与第一条终点完全一致。
-停止与队列清空也已通过实测；当前共 10 项单元测试通过。
-自然语言会话历史、澄清续答和模型失败恢复另有 mock 单元测试；真实模型服务仍需配置后验证。
-
-### 单次命令行运行
-
-从 `/home/caosiqi/project/habitat_work` 执行，使用已安装 Habitat-Sim 0.3.3 的环境：
-
-```bash
-# 只导出场景对象、目标站立点、路标及连接。
-/home/caosiqi/miniconda3/envs/habitat/bin/python -m legacy_gt.run --mode export
-
-# 离线执行验证：BFS 选路线，人形逐段执行。不调用模型、不声称是 agent 规划。
-/home/caosiqi/miniconda3/envs/habitat/bin/python -m legacy_gt.run --mode smoke
-
-# 验证规划输出边界，无需 GPU 或模型服务。
-/home/caosiqi/miniconda3/envs/habitat/bin/python -m unittest discover -s tests -t . -p 'test_*.py'
-```
-
-渲染需要 GPU/EGL 可访问；受限沙箱中可能提示 `no EGL devices found`。
-输出放在 `outputs/<时间>/`，每次独立目录，包含 `scene.json`、`plan_0.json`、
-`walk.mp4`、`final.png`、`trajectory.json` 和 `result.json`。
-`result.json` 是执行成功与否的依据，不仅看视频是否生成。
-
-本机已验证：
-
-- `outputs/20261013_174802_451479/`：5 段路线到 `chair_04_:0000`，终点误差约 0.0775 米。
-- `outputs/20261013_174858_454683/`：6 段含转弯路线到 `chair_05_:0000`，终点误差约 0.0598 米。
-- 6 项规划边界及模型 HTTP 请求契约测试通过；HTTP 测试使用 mock，未调用真实模型。
-- 模型服务尚未配置，因此自然语言规划效果与真实模型重规划尚未实测。
-
-现有数据集配置还引用了一些本地缺失的 `v3_sc4_staging_*` NavMesh，
-加载时会打印相关错误；本 demo 的 `apt_0` 已成功加载并重新计算 NavMesh。
-
-可以通过 `--target` 指定导出对象的完整 ID，通过 `--start` 指定路标 ID。
-`--mode replay --plan <plan.json>` 执行已有路线，并重新验证当前场景中的连接。
-路线文件需来自同一场景和地图参数；不要混用不同场景的节点 ID。
-
-## 真正接入 agent
-
-实现的是可替换的 chat-completions HTTP 客户端，模型自己输出节点路线。
-配置提供商对应的 API 根地址（通常包含 `/v1`）和模型名称：
-
-```bash
-export NAV_LLM_BASE_URL='http://127.0.0.1:8000/v1'
-export NAV_LLM_MODEL='你的模型名称'
-# 需要认证时，在本地环境变量设置 NAV_LLM_API_KEY，勿提交密钥。
-/home/caosiqi/miniconda3/envs/habitat/bin/python -m legacy_gt.run \
-  --mode agent --instruction '走到最近的一把椅子旁边'
-```
-
-本地服务示例地址不是自动部署的模型。实际模型效果需要接上服务后验证。
-不提供图片，模型接收指令、GT 对象表和路标图。模型调用不使用 Habitat 全局路径查询。
-输出必须是 `{"target_object":"真实对象ID","route":["起点","中间节点","目标站立点"]}`。
-默认最多重规划两次；无效路线反馈给模型，不直接执行。遇到阻塞时以实际位置生成新起点。
-目标属性未知或目标有歧义时，模型可返回 `needs_clarification`；程序保存问题并停止，
-当前 CLI 尚未实现交互追问续跑。网络错误会明确报错，不自动切换成假模型或 BFS。
-浏览器版 `serve.py` 已支持持续会话和接着回答澄清问题。
-
-颜色不从 semantic_id 推断。`legacy_gt/annotations.json` 初始为空；看过资产后可人工补充：
-
-```json
-{
-  "从 scene.json 复制的真实对象ID": {"color": "red"}
-}
-```
-
-这只是字段示例，并未声明场景中任何椅子是红色。补充属性前，
-“红色椅子”无法由现有 GT 确定；建议先使用类别、实例 ID 或最近目标指令。
-
-## 模块与分工
-
-- `world.py`：读取加载后的刚体状态及语义词典，变换包围盒到世界坐标，按身体半径重建 NavMesh，生成直连路标图。
-- `planning.py`：模型规划接口、路线结构和连接校验，以及明确区分的离线 BFS 测试基线。
-- `executor.py`：复用 Habitat-Lab 官方行走控制器，逐帧校验根部移动并跟踪指定路段，不计算绕路。
-- `legacy_gt/run.py`：有限次数的规划、执行、反馈循环，保存视频和日志。
-- `session.py`：持续会话、历史上下文、从实际位置连接路标图、单次失败隔离。
-- `task_graph.py`：LangGraph 多步骤任务、步骤校验、保存起点、返回与顺序执行。
-- `serve.py` / `legacy_gt/web.html`：本地 HTTP 服务、MJPEG 视频流、浏览器指令队列与停止控制。所有仿真操作只在同一个工作线程运行。
-
-以后换 nanobot/Harness：调用这些普通 Python 接口或加 HTTP/MCP 包装即可。
-以后接视觉：替换对象信息来源；若连全局 GT 地图也移除，还需接建图与机器人定位。
-
-## 当前边界
-
-- 家具和杂物冻结，门保持加载时状态；不支持动态场景地图自动更新。
-- 导出的目标对象当前为刚体家具；关节家具参与几何导航，但没有作为语义任务目标导出。
-- 路标图使用规则采样和家具周围候选点，只保留最大连通分量；它不保证覆盖整个 NavMesh。
-- “旁边”定义为站到关联可达节点，候选点按水平包围盒边界距离筛选；没有实现“左边”等相对空间关系。
-- 不执行最终面向物体动作；当前成功指标是到达目标站立点 0.1 米内。
-- NavMesh 使用圆柱体近似并逐步过滤根部移动；这不保证手臂、步态摆动的完整碰撞包络。
-- 语言目标匹配由模型承担，程序能验证路线与对象 ID 的一致性，不能独立保证语言语义理解正确。
-
-## 依赖与资产来源
-
-复用 `../habitat-lab/habitat-lab`，缺失依赖安装于 `vendor/`：
-`hydra-core==1.3.2`、`omegaconf==2.3.0`、`antlr4-python3-runtime==4.9.3`、
-`gym==0.23.1`、`gym-notices==0.1.0`。不覆盖 conda 环境已有包。
-还使用已有的 numpy、magnum、imageio、imageio-ffmpeg 等 Habitat 环境依赖。
-
-人形资产取自官方 <https://huggingface.co/datasets/ai-habitat/habitat_humanoids> 的 `female_0/`：
-URDF、GLB、AO 配置和动作 pickle。使用这些资产须遵循上游资产许可。
-只加载可信的官方 pickle；已下载的三个 LFS 文件 SHA256 与上游记录匹配：
+先在本机安装并启动 Ollama，再准备 `start_visual.sh` 中配置的模型。当前默认模型名是：
 
 ```text
-female_0.urdf: beefa71417e13eadf0e93a9689581d7ffec37586d062bb8118fda6f840f8c536
-female_0.glb: 7e007a0dcb79c986a4f9570234b649563669e8c200e4425f5cf70a025c12c28a
-female_0_motion_data_smplx.pkl: 601b8b210e00c73bf26e6ec9d5e2573d2e8b1f815a2e2e172fc1ae53262c69d8
+qwen3.8:27b-q4_K_M
 ```
+
+该模型需要较大的显存/内存；资源不足时可通过 `NAV_VLM_MODEL` 选择兼容的视觉模型。
+
+## 8. 启动与验证
+
+先检查关键依赖：
+
+```bash
+python -c "import habitat_sim, habitat; print('Habitat imports OK')"
+test -f "${HABITAT_DATA_PATH:-../data}/replica_cad/replicaCAD.scene_dataset_config.json"
+test -f "${NAV_HUMANOID_ASSETS:-assets/female_0}/female_0.urdf"
+```
+
+启动云端 VLM 模式：
+
+```bash
+bash start_visual.sh cloud
+```
+
+启动本地 Ollama 模式：
+
+```bash
+bash start_visual.sh local
+```
+
+也可直接启动服务：
+
+```bash
+python serve.py --mode visual --scene apt_0 --port 8770
+```
+
+浏览器打开 <http://127.0.0.1:8770>。远程服务器需要用 VS Code Ports 或 SSH 转发端口
+
+
+服务默认只绑定 `127.0.0.1`。输出写入 `outputs/`，该目录不会上传 GitHub。
+
+## 9. 测试
+
+运行不依赖真实模型服务的单元测试：
+
+```bash
+python -m unittest discover -s tests -t . -p 'test_*.py'
+```
+
+运行单次视觉导航（需要 Habitat、场景、人形资产、视觉权重和 VLM）：
+
+```bash
+python run_visual.py --scene apt_0 --instruction "走到一把白色椅子旁边"
+```
+
+查看其他参数：
+
+```bash
+python run_visual.py --help
+python serve.py --help
+```
+
+## 外部资源清单
+
+| 资源 | 是否必需 | 是否包含在仓库 | 用途 |
+| --- | --- | --- | --- |
+| Habitat-Sim 0.3.3 + Bullet | 必需 | 否 | 仿真、物理、渲染和 NavMesh |
+| Habitat-Lab stable | 必需 | 否 | 人形角色和控制器 |
+| ReplicaCAD | 默认演示必需 | 否 | `apt_0` / `apt_1` 场景 |
+| HM3D | 默认演示不需要 | 否 | 仅扩展到 HM3D 场景时需要 |
+| `female_0` humanoid assets | 必需 | 否 | 人形模型和动作 |
+| SAM checkpoint / Grounding DINO | 完整视觉模式必需 | 否 | 分割和开放词汇检测 |
+| 云端 VLM Key 或本地 Ollama | 自然语言视觉模式必需 | 否 | 目标理解和视觉决策 |
+
+## 目录结构
+
+```text
+app/                  浏览器后端与配置读取
+config/               示例配置（本地密钥配置被忽略）
+legacy_gt/            GT 基线与历史流程
+requirements/         Python 依赖版本
+scripts/              检查、评测和实用脚本
+simulation/           Habitat 世界与人形执行器
+tests/                单元测试
+visual_nav/           视觉导航、搜索、记忆和核验
+web/                  浏览器页面
+run_visual.py         单次视觉导航入口
+run_visual_session.py 连续 CLI 会话入口
+serve.py              Web 服务入口
+start_visual.sh       本地/云端 VLM 启动脚本
+```
+
+## 常见问题
+
+### `ModuleNotFoundError: habitat_sim`
+
+当前 Conda 环境没有安装 Habitat-Sim，或运行命令时没有激活正确环境。
+
+### `ModuleNotFoundError: habitat`
+
+缺少 Habitat-Lab。执行 editable 安装，或设置 `HABITAT_LAB_PATH`。
+
+### 找不到 `replicaCAD.scene_dataset_config.json`
+
+ReplicaCAD 未下载到默认目录。检查 `HABITAT_DATA_PATH` 是否指向包含 `replica_cad/` 的数据根目录。
+
+### `no EGL devices found`
+
+服务器没有向当前进程暴露可用 GPU/EGL，或安装的 Habitat-Sim 不是合适的 headless 构建。先检查 `nvidia-smi` 和容器/任务的 GPU 权限。
+
+### 找不到 SAM checkpoint 或 humanoid asset
+
+这些大文件不会从 GitHub 自动获得。按照上面的资源步骤下载，并检查 `NAV_WEIGHTS_PATH`、`NAV_HUMANOID_ASSETS`。
+
+## 安全与数据说明
+
+- 不要提交 `config/model_config.json`、`.env`、API Key 或服务凭据。
+- `outputs/` 可能包含输入指令、模型响应、观察图像和轨迹，默认不进入 Git。
+- ReplicaCAD、人形资产和模型权重受各自上游许可证约束，本仓库不重新分发这些资源。

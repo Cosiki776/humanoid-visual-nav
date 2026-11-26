@@ -29,7 +29,7 @@ def main():
     p.add_argument('--execution-mode', choices=['sync', 'async'], default=os.environ.get('NAV_EXECUTION_MODE', 'sync'))
     p.add_argument('--image-policy', choices=['adaptive', 'legacy'], default=os.environ.get('NAV_IMAGE_POLICY', 'adaptive'))
     p.add_argument('--device', default='cuda:0')
-    p.add_argument('--sam-checkpoint', default=str(bootstrap.WORKSPACE/'weights/sam_vit_b_01ec64.pth'))
+    p.add_argument('--sam-checkpoint', default=str(bootstrap.WEIGHTS/'sam_vit_b_01ec64.pth'))
     p.add_argument('--dino-model', default='IDEA-Research/grounding-dino-tiny')
     p.add_argument('--target-category', help='Explicit English target for perception or color-debug mode')
     p.add_argument('--output', type=Path)

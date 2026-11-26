@@ -43,7 +43,7 @@ def main():
             from visual_nav.perception import GroundedSAM
             from visual_nav.policy import VLMPolicy
             from visual_nav.loop import VisualNavigator
-            detector = GroundedSAM(str(bootstrap.WORKSPACE/'weights/sam_vit_b_01ec64.pth'))
+            detector = GroundedSAM(str(bootstrap.WEIGHTS/'sam_vit_b_01ec64.pth'))
             policy = VLMPolicy()
             policy.trace_dir = args.output/'vlm_requests'
             task = policy.parse_instruction(result['instruction'])

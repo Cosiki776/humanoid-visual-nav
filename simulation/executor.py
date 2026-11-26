@@ -24,7 +24,7 @@ class _LabSimulatorAdapter:
 
 class Executor:
     def __init__(self, world, start, frame_callback=None, realtime=False, trace_limit=None):
-        assets = bootstrap.ROOT / "assets/female_0"
+        assets = bootstrap.HUMANOID_ASSETS
         motion = assets / "female_0_motion_data_smplx.pkl"
         cfg = SimpleNamespace(auto_update_sensor_transform=False,
                               articulated_agent_urdf=str(assets / "female_0.urdf"),

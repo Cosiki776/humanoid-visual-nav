@@ -90,7 +90,7 @@ def main():
                     continue
                 if detector is None:
                     from visual_nav.perception import GroundedSAM
-                    detector = GroundedSAM(str(bootstrap.WORKSPACE/'weights/sam_vit_b_01ec64.pth'),
+                    detector = GroundedSAM(str(bootstrap.WEIGHTS/'sam_vit_b_01ec64.pth'),
                                            'IDEA-Research/grounding-dino-tiny', 'cuda:0')
                 from visual_nav.policy import VLMPolicy
                 from visual_nav.loop import VisualNavigator

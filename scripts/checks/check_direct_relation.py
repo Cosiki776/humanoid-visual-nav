@@ -30,7 +30,7 @@ def main():
         from visual_nav.perception import GroundedSAM
         segmenter=GroundedSAM.__new__(GroundedSAM)
         segmenter.sam=SamPredictor(sam_model_registry['vit_b'](
-            checkpoint=str(bootstrap.WORKSPACE/'weights/sam_vit_b_01ec64.pth')).to('cuda:0').eval())
+            checkpoint=str(bootstrap.WEIGHTS/'sam_vit_b_01ec64.pth')).to('cuda:0').eval())
     results=[]
     for key in args.frames:
         with np.load(args.run/(key+'.npz')) as data:
